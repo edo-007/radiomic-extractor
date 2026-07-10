@@ -206,6 +206,7 @@ class Paziente(BaseModel):
         # Prende il primo file .dcm (sicuro che esista grazie al validator di Pydantic)
         primo_file = next(cartella.glob("*.dcm"))
 
+        print(f"File DICOM LETTO: {primo_file}")
         # stop_before_pixels=True rende l'operazione istantanea
         return pydicom.dcmread(primo_file, stop_before_pixels=True)
 
