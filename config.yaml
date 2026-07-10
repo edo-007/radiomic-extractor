@@ -1,3 +1,60 @@
+# Configurazione del progetto.
+#
+# Regole generali:
+# - I percorsi vanno scritti tra virgolette, soprattutto su Windows.
+#   Esempio Windows: "C:/Users/TA/Desktop/edoardo/radiomic-data/Radiomica"
+#   Esempio Linux: "/home/edoardo/Desktop/legnago/python-scripts/radiomic-data/Radiomica"
+# - I percorsi relativi, come "./results", sono calcolati partendo dalla cartella
+#     in cui si trova questo file config.yaml.
+# - I numeri decimali usano il punto, non la virgola: 32.0, non 32,0.
+# - Le liste brevi possono essere scritte tra parentesi quadre: [1.0, 1.0, 1.0].
+# - Usa null quando un parametro e' opzionale e non vuoi impostarlo.
+# - Usa .nan per indicare un limite numerico aperto, ad esempio nessun limite
+#     superiore in resegmentation_intensity_range.
+#
+# Sezioni:
+# - data: contiene cartella dei pazienti e cartella di output.
+# - mirp: contiene i parametri passati all'estrattore di feature radiomiche.
+#
+# Parametri principali:
+# - patients_folder: cartella radice che contiene gli studi dei pazienti.
+# - patients_csv: CSV con DicomID, NomeCognome e stato microsatellitare.
+# - output_dir: cartella dove salvare eventuali risultati prodotti.
+# - bin_width: ampiezza del bin per la discretizzazione fixed_bin_size.
+# - voxel_spacing: tre valori [z, y, x] per il ricampionamento.
+# - roi_names: null per usare tutte le ROI trovate, oppure lista di nomi ROI.
+#   Esempio: ["GTV", "PTV"]
+# - resegmentation_intensity_range: due valori [min, max] per filtrare le HU.
+#   Esempio CT tipico: [-1000.0, .nan]
+# - feature_families: famiglie di feature da estrarre.
+# - by_slice: false per feature 3D, true per feature 2D slice-by-slice.
+# - num_processes: processi paralleli; 1/null per sequenziale, -1 per tutti i core.
+# - write_features: true per scrivere le feature su file.
+# - export_features: true per restituire le feature in Python.
+
 # Percorso originale notazione Windows: 
 #    "C:\Users\TA\Desktop\edoardo\radiomic-data\Radiomica"
-patients_folder: "C:/Users/TA/Desktop/edoardo/radiomic-data/Radiomica"
+data:
+  # patients_folder: "C:/Users/TA/Desktop/edoardo/radiomic-data/Radiomica"
+  # patients_folder: "/home/edoardo/Desktop/legnago/python-scripts/radiomic-data/Radiomica"
+  patients_folder: "/home/edoardo/Desktop/legnago/python-scripts/radiomic-data/"
+  patients_csv: "../radiomic-data/pazienti.csv"
+  output_dir: "./results"
+
+mirp:
+  # bin_width: 32.0
+  bin_width: 32.0
+  # voxel_spacing: [1.0, 1.0, 1.0]
+  voxel_spacing: [2.0, 2.0, 2.0]
+  roi_names: null
+  resegmentation_intensity_range: [-1000.0, .nan]
+  feature_families:
+    - statistics
+    # - intensity_histogram
+    # - morph
+    # - intensity_volume_histogram
+  by_slice: false
+  # La versione attiva di extract_batch è sequenziale.
+  num_processes: 1
+  write_features: false
+  export_features: true
