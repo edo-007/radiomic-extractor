@@ -9,6 +9,12 @@ from pathlib import Path
 from typing import Any
 import pydicom
 
+
+from pathlib import Path
+
+from pydicom.dataset import Dataset
+from pydicom.errors import InvalidDicomError
+
 import yaml
 from pydantic import (
     AliasChoices,
@@ -195,20 +201,124 @@ class Paziente(BaseModel):
         return value
         
 
-    def _get_dicom_dataset(self, use_rt: bool = False) -> pydicom.Dataset:
-        """Helper privato per selezionare il path, trovare il primo file DICOM
 
-        e leggerne i metadati (senza caricare i pixel in memoria).
+
+    def _get_dicom_dataset(self, use_rt: bool = False) -> Dataset:
+        """Legge i metadati del primo file DICOM valido trovato.
+
+        Seleziona la cartella CT o RT, ignora file vuoti e file non validi,
+        senza caricare i Pixel Data in memoria.
+
+        Args:
+            use_rt: Se True usa ``self.path_rt``, altrimenti ``self.path_ct``.
+
+        Returns:
+            Il primo dataset DICOM valido trovato.
+
+        Raises:
+            FileNotFoundError: Se la cartella non esiste o non contiene file
+                con estensione ``.dcm``.
+            InvalidDicomError: Se nessun file ``.dcm`` non vuoto è un DICOM
+                valido.
         """
-        # Sceglie il percorso in base al flag
-        cartella = self.path_rt if use_rt else self.path_ct
+        cartella = Path(self.path_rt if use_rt else self.path_ct)
 
-        # Prende il primo file .dcm (sicuro che esista grazie al validator di Pydantic)
-        primo_file = next(cartella.glob("*.dcm"))
+        if not cartella.exists():
+            raise FileNotFoundError(
+                f"La cartella DICOM non esiste: {cartella.resolve()}"
+            )
 
-        print(f"File DICOM LETTO: {primo_file}")
-        # stop_before_pixels=True rende l'operazione istantanea
-        return pydicom.dcmread(primo_file, stop_before_pixels=True)
+        if not cartella.is_dir():
+            raise NotADirectoryError(
+                f"Il percorso DICOM non è una cartella: {cartella.resolve()}"
+            )
+
+        # suffix.lower() gestisce sia .dcm sia .DCM.
+        file_dicom = sorted(
+            (
+                file
+                for file in cartella.iterdir()
+                if file.is_file() and file.suffix.lower() == ".dcm"
+            ),
+            key=lambda file: file.name.lower(),
+        )
+
+        if not file_dicom:
+            raise FileNotFoundError(
+                f"Nessun file .dcm trovato in: {cartella.resolve()}"
+            )
+
+        file_vuoti: list[Path] = []
+        file_non_validi: list[tuple[Path, str]] = []
+
+        for file_path in file_dicom:
+            try:
+                dimensione = file_path.stat().st_size
+            except OSError as exc:
+                file_non_validi.append(
+                    (file_path, f"impossibile leggere le informazioni del file: {exc}")
+                )
+                continue
+
+            if dimensione == 0:
+                file_vuoti.append(file_path)
+                continue
+
+            try:
+                dataset = pydicom.dcmread(
+                    file_path,
+                    stop_before_pixels=True,
+                    force=False,
+                )
+            except (InvalidDicomError, OSError) as exc:
+                file_non_validi.append((file_path, str(exc)))
+                continue
+
+            # Controllo minimo per evitare di accettare dataset privi
+            # dei principali identificativi DICOM.
+            identificatori = (
+                "SOPClassUID",
+                "SOPInstanceUID",
+                "StudyInstanceUID",
+                "SeriesInstanceUID",
+            )
+
+            if not any(hasattr(dataset, nome) for nome in identificatori):
+                file_non_validi.append(
+                    (file_path, "mancano i principali identificativi DICOM")
+                )
+                continue
+
+            # print(
+            #     f"File DICOM letto: {file_path.resolve()} "
+            #     f"({dimensione} byte)"
+            # )
+
+            return dataset
+
+        dettagli: list[str] = []
+
+        if file_vuoti:
+            dettagli.append(
+                "File vuoti ignorati:\n"
+                + "\n".join(f"- {file.name}" for file in file_vuoti)
+            )
+
+        if file_non_validi:
+            dettagli.append(
+                "File non validi ignorati:\n"
+                + "\n".join(
+                    f"- {file.name}: {errore}"
+                    for file, errore in file_non_validi
+                )
+            )
+
+        descrizione_errori = "\n\n".join(dettagli)
+
+        raise InvalidDicomError(
+            f"Nessun file DICOM valido trovato in {cartella.resolve()}."
+            + (f"\n\n{descrizione_errori}" if descrizione_errori else "")
+        )
 
     # tag: (0010,0020)
     def get_patient_id(self, use_rt: bool = False) -> str:
