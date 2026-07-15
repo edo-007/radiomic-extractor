@@ -15,6 +15,14 @@ def main() -> None:
         print("Nessun paziente valido trovato.")
         return
 
+    if config.n_test is not False:
+        numero_pazienti = len(pazienti)
+        pazienti = pazienti[: config.n_test]
+        print(
+            "Modalità n-test attiva: "
+            f"analizzo i primi {len(pazienti)} pazienti su {numero_pazienti}."
+        )
+
     conteggio_stati = Counter(
         paziente.stato_microsatellitare.value
         for paziente in pazienti
@@ -41,7 +49,15 @@ def main() -> None:
 
     # Crea l'estrattore (Wrapper di MIRP) usando i parametri della configurazione.
     mirp_config = config.mirp
+    if not mirp_config.export_features:
+        print(
+            "Nota: export_features era false; lo imposto a true per scrivere "
+            "il CSV finale aggregato."
+        )
+        mirp_config = mirp_config.model_copy(update={"export_features": True})
+
     extractor = MirpExtractor(config=mirp_config)
+    output_dir = config.data.ensure_output_dir()
 
     print(
         f"Avvio l'estrazione radiomica per {len(pazienti)} pazienti "
@@ -49,7 +65,7 @@ def main() -> None:
     )
     risultati = extractor.extract_batch(
         pazienti,
-        output_dir=config.data.ensure_output_dir(),
+        output_dir=output_dir,
         verbose=True,
     )
 
@@ -61,6 +77,14 @@ def main() -> None:
         f"Estrazione completata: {len(risultati)} pazienti, "
         f"{numero_tabelle} tabelle restituite."
     )
+
+    csv_path = config.data.ensure_features_csv_path()
+    numero_righe = extractor.write_feature_csv(
+        risultati=risultati,
+        pazienti=pazienti,
+        csv_path=csv_path,
+    )
+    print(f"Feature scritte in: {csv_path} ({numero_righe} righe).")
 
 
 if __name__ == "__main__":

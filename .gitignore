@@ -1,5 +1,6 @@
 data/*
 .venv/
 results/*
+results
 __pycache__
-./config.yaml
+config.yaml

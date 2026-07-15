@@ -6,7 +6,7 @@ from collections import defaultdict
 from enum import Enum
 from math import isnan
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 import pydicom
 
 
@@ -48,10 +48,19 @@ class DataConfig(BaseModel):
     patients_folder: DirectoryPath
     patients_csv: FilePath | None = None
     output_dir: Path = Path("./results")
+    features_csv: Path = Path("features.csv")
 
     def ensure_output_dir(self) -> Path:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         return self.output_dir
+
+    def ensure_features_csv_path(self) -> Path:
+        output_dir = self.ensure_output_dir()
+        csv_path = self.features_csv.expanduser()
+        if not csv_path.is_absolute():
+            csv_path = output_dir / csv_path
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        return csv_path
 
 
 class MirpConfig(BaseModel):
@@ -140,6 +149,21 @@ class GlobalConfig(BaseModel):
 
     data: DataConfig
     mirp: MirpConfig = Field(default_factory=MirpConfig)
+    n_test: int | Literal[False] = Field(
+        default=False,
+        validation_alias=AliasChoices("n-test", "n_test"),
+    )
+
+    @field_validator("n_test", mode="before")
+    @classmethod
+    def validate_n_test(cls, value: Any) -> Any:
+        if value is False:
+            return value
+        if value is True:
+            raise ValueError("n-test deve essere false oppure un intero >= 1")
+        if isinstance(value, int) and value >= 1:
+            return value
+        raise ValueError("n-test deve essere false oppure un intero >= 1")
 
 
 class ConfigManager(BaseModel):
@@ -687,6 +711,90 @@ class MirpExtractor(BaseModel):
             paziente.nome: completed_results[paziente.nome]
             for paziente in pazienti
         }
+
+    def write_feature_csv(
+        self,
+        risultati: dict[str, list[Any] | None],
+        pazienti: list[Paziente],
+        csv_path: Path,
+    ) -> int:
+        """Scrive in un CSV unico le tabelle di feature restituite da MIRP."""
+        import pandas as pd
+
+        frames: list[pd.DataFrame] = []
+
+        for paziente in pazienti:
+            feature_tables = risultati.get(paziente.nome)
+            for table_index, feature_table in enumerate(
+                self._normalise_feature_tables(feature_tables),
+                start=1,
+            ):
+                table = feature_table.copy()
+                metadata = {
+                    "patient_name": paziente.nome,
+                    "stato_microsatellitare": (
+                        paziente.stato_microsatellitare.value
+                        if paziente.stato_microsatellitare is not None
+                        else ""
+                    ),
+                    "feature_table_index": table_index,
+                }
+
+                for column, value in metadata.items():
+                    table[column] = value
+
+                metadata_columns = list(metadata)
+                table = table[
+                    metadata_columns
+                    + [column for column in table.columns if column not in metadata]
+                ]
+                frames.append(table)
+
+        if frames:
+            features = pd.concat(frames, ignore_index=True, sort=False)
+        else:
+            logger.warning("Nessuna tabella di feature restituita da MIRP")
+            features = pd.DataFrame(
+                columns=[
+                    "patient_name",
+                    "stato_microsatellitare",
+                    "feature_table_index",
+                ]
+            )
+
+        features.to_csv(csv_path, sep=";", na_rep="", index=False)
+        logger.info("Feature scritte in %s", csv_path)
+        return len(features)
+
+    @staticmethod
+    def _normalise_feature_tables(feature_tables: Any) -> list[Any]:
+        import pandas as pd
+
+        if feature_tables is None:
+            return []
+
+        if isinstance(feature_tables, pd.DataFrame):
+            return [feature_tables]
+
+        if not isinstance(feature_tables, list):
+            raise TypeError(
+                "MIRP ha restituito un tipo inatteso per le feature: "
+                f"{type(feature_tables).__name__}"
+            )
+
+        normalised_tables: list[pd.DataFrame] = []
+        for item in feature_tables:
+            if item is None:
+                continue
+            if isinstance(item, pd.DataFrame):
+                normalised_tables.append(item)
+                continue
+            raise TypeError(
+                "MIRP ha restituito una tabella feature inattesa: "
+                f"{type(item).__name__}"
+            )
+
+        return normalised_tables
 
     def _extract_patient(
         self,
