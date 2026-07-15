@@ -66,6 +66,7 @@ class DataConfig(BaseModel):
 class MirpConfig(BaseModel):
     """Parametri necessari per l'estrazione radiomica con MIRP."""
 
+    ibsi_compliant: bool = True
     bin_width: float = Field(25.0, gt=0)
     voxel_spacing: list[float] = Field(default_factory=lambda: [1.0, 1.0, 1.0])
     roi_names: list[str] | None = None
@@ -128,6 +129,7 @@ class MirpConfig(BaseModel):
             "image_modality": "ct",
             "mask_modality": "rtstruct",
             "association_strategy": "frame_of_reference",
+            "ibsi_compliant": self.ibsi_compliant,
             "by_slice": self.by_slice,
             "new_spacing": self.voxel_spacing,
             "base_feature_families": self.feature_families,
@@ -718,36 +720,24 @@ class MirpExtractor(BaseModel):
         pazienti: list[Paziente],
         csv_path: Path,
     ) -> int:
-        """Scrive in un CSV unico le tabelle di feature restituite da MIRP."""
+        """Scrive solo stato microsatellitare e feature radiomiche in un CSV."""
         import pandas as pd
 
         frames: list[pd.DataFrame] = []
 
         for paziente in pazienti:
             feature_tables = risultati.get(paziente.nome)
-            for table_index, feature_table in enumerate(
-                self._normalise_feature_tables(feature_tables),
-                start=1,
-            ):
-                table = feature_table.copy()
-                metadata = {
-                    "patient_name": paziente.nome,
-                    "stato_microsatellitare": (
+            for feature_table in self._normalise_feature_tables(feature_tables):
+                table = self._keep_radiomic_feature_columns(feature_table)
+                table.insert(
+                    0,
+                    "stato_microsatellitare",
+                    (
                         paziente.stato_microsatellitare.value
                         if paziente.stato_microsatellitare is not None
                         else ""
                     ),
-                    "feature_table_index": table_index,
-                }
-
-                for column, value in metadata.items():
-                    table[column] = value
-
-                metadata_columns = list(metadata)
-                table = table[
-                    metadata_columns
-                    + [column for column in table.columns if column not in metadata]
-                ]
+                )
                 frames.append(table)
 
         if frames:
@@ -756,9 +746,7 @@ class MirpExtractor(BaseModel):
             logger.warning("Nessuna tabella di feature restituita da MIRP")
             features = pd.DataFrame(
                 columns=[
-                    "patient_name",
                     "stato_microsatellitare",
-                    "feature_table_index",
                 ]
             )
 
@@ -795,6 +783,43 @@ class MirpExtractor(BaseModel):
             )
 
         return normalised_tables
+
+    @staticmethod
+    def _keep_radiomic_feature_columns(feature_table: Any) -> Any:
+        mirp_metadata_columns = {
+            "sample_name",
+            "image_file_name",
+            "image_directory",
+            "image_study_date",
+            "image_study_description",
+            "image_series_description",
+            "image_series_instance_uid",
+            "image_modality",
+            "image_pet_suv_type",
+            "image_mask_label",
+            "image_mask_file_name",
+            "image_mask_directory",
+            "image_mask_series_description",
+            "image_mask_series_instance_uid",
+            "image_settings_id",
+            "image_voxel_size_x",
+            "image_voxel_size_y",
+            "image_voxel_size_z",
+            "image_noise_level",
+            "image_noise_iteration_id",
+            "image_rotation_angle",
+            "image_translation_x",
+            "image_translation_y",
+            "image_translation_z",
+            "image_mask_randomise_id",
+            "image_mask_adapt_size",
+        }
+        feature_columns = [
+            column
+            for column in feature_table.columns
+            if column not in mirp_metadata_columns
+        ]
+        return feature_table.loc[:, feature_columns].copy()
 
     def _extract_patient(
         self,
