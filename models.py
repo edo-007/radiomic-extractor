@@ -69,7 +69,6 @@ class MirpConfig(BaseModel):
     ibsi_compliant: bool = True
     bin_width: float = Field(25.0, gt=0)
     voxel_spacing: list[float] = Field(default_factory=lambda: [1.0, 1.0, 1.0])
-    roi_namer: list[str] | None = None
     roi_names: list[str] | None = None
     resegmentation_intensity_range: list[float] | None = Field(
         default_factory=lambda: [-1000.0, float("nan")]
@@ -138,9 +137,8 @@ class MirpConfig(BaseModel):
             "base_discretisation_bin_width": float(self.bin_width),
         }
 
-        roi_names = self.roi_namer or self.roi_names
-        if roi_names:
-            kwargs["roi_name"] = roi_names
+        if self.roi_names:
+            kwargs["roi_name"] = self.roi_names
 
         if self.resegmentation_intensity_range:
             kwargs["resegmentation_intensity_range"] = self.resegmentation_intensity_range
