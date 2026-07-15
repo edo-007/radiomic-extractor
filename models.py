@@ -69,6 +69,7 @@ class MirpConfig(BaseModel):
     ibsi_compliant: bool = True
     bin_width: float = Field(25.0, gt=0)
     voxel_spacing: list[float] = Field(default_factory=lambda: [1.0, 1.0, 1.0])
+    roi_namer: list[str] | None = None
     roi_names: list[str] | None = None
     resegmentation_intensity_range: list[float] | None = Field(
         default_factory=lambda: [-1000.0, float("nan")]
@@ -137,8 +138,9 @@ class MirpConfig(BaseModel):
             "base_discretisation_bin_width": float(self.bin_width),
         }
 
-        if self.roi_names:
-            kwargs["roi_name"] = self.roi_names
+        roi_names = self.roi_namer or self.roi_names
+        if roi_names:
+            kwargs["roi_name"] = roi_names
 
         if self.resegmentation_intensity_range:
             kwargs["resegmentation_intensity_range"] = self.resegmentation_intensity_range
@@ -720,7 +722,7 @@ class MirpExtractor(BaseModel):
         pazienti: list[Paziente],
         csv_path: Path,
     ) -> int:
-        """Scrive solo stato microsatellitare e feature radiomiche in un CSV."""
+        """Scrive nome, stato microsatellitare e feature radiomiche in un CSV."""
         import pandas as pd
 
         frames: list[pd.DataFrame] = []
@@ -738,6 +740,11 @@ class MirpExtractor(BaseModel):
                         else ""
                     ),
                 )
+                table.insert(
+                    0,
+                    "nome_cognome",
+                    self._format_nome_cognome(paziente.nome),
+                )
                 frames.append(table)
 
         if frames:
@@ -746,6 +753,7 @@ class MirpExtractor(BaseModel):
             logger.warning("Nessuna tabella di feature restituita da MIRP")
             features = pd.DataFrame(
                 columns=[
+                    "nome_cognome",
                     "stato_microsatellitare",
                 ]
             )
@@ -820,6 +828,10 @@ class MirpExtractor(BaseModel):
             if column not in mirp_metadata_columns
         ]
         return feature_table.loc[:, feature_columns].copy()
+
+    @staticmethod
+    def _format_nome_cognome(value: str) -> str:
+        return " ".join(re.sub(r"[\^_]+", " ", value).split())
 
     def _extract_patient(
         self,
