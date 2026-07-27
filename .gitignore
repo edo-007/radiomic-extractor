@@ -3,4 +3,4 @@ data/*
 results/*
 results
 __pycache__
-config.yaml
+*.yaml

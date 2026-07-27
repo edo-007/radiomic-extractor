@@ -1,10 +1,13 @@
 from collections import Counter
 
-from models import MirpExtractor, load_configuration, carica_pazienti
+try:
+    from .models import MirpExtractor, carica_pazienti, load_configuration
+except ImportError:
+    from models import MirpExtractor, carica_pazienti, load_configuration
 
 
 def main() -> None:
-    # Carica e valida i parametri scritti in config.yaml.
+    # Carica e valida i parametri scritti in config_extractor.yaml.
     config = load_configuration()
 
     # Cerca le coppie CT + RTStruct e associa lo stato microsatellitare dal CSV.

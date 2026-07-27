@@ -1,7 +1,10 @@
-from models import load_configuration, carica_pazienti
+try:
+    from .models import carica_pazienti, load_configuration
+except ImportError:
+    from models import carica_pazienti, load_configuration
 
 
-# Carica e valida i parametri scritti in config.yaml.
+# Carica e valida i parametri scritti in config_extractor.yaml.
 config = load_configuration()
 
 # Cerca nelle cartelle dei dati le coppie CT + RTStruct.
@@ -33,6 +36,5 @@ for paz in ordina_pazienti_per_data(pazienti, piu_recenti_prima=True):
 if not pazienti:
     print("Nessun paziente valido trovato.")
     exit()
-
 
 

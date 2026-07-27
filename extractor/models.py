@@ -1,21 +1,17 @@
 from __future__ import annotations
 
 import csv
+import logging
 import re
 from collections import defaultdict
 from enum import Enum
 from math import isnan
 from pathlib import Path
 from typing import Any, Literal
+
 import pydicom
-
-
-from pathlib import Path
-
-from pydicom.dataset import Dataset
-from pydicom.errors import InvalidDicomError
-
 import yaml
+
 from pydantic import (
     AliasChoices,
     BaseModel, 
@@ -24,9 +20,13 @@ from pydantic import (
     FilePath, 
     field_validator
 )
+from pydicom.dataset import Dataset
+from pydicom.errors import InvalidDicomError
 
-from logger_conf import logger
-import logging
+try:
+    from .logger_conf import logger
+except ImportError:
+    from logger_conf import logger
 
 from rich.console import Console
 from rich.progress import (
@@ -40,7 +40,8 @@ from rich.progress import (
 )
 from rich.table import Table
 
-CONFIG_FILE = "./config.yaml"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_FILE = PROJECT_ROOT / "config_extractor.yaml"
 
 class DataConfig(BaseModel):
     """Percorsi dei dati in input e output."""
