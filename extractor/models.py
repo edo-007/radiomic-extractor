@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import os
 import re
 from collections import defaultdict
 from enum import Enum
@@ -42,6 +43,64 @@ from rich.table import Table
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_FILE = PROJECT_ROOT / "config_extractor.yaml"
+
+
+def _safe_resolve(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
+def _filesystem_path(path: Path) -> Path:
+    r"""Restituisce un path adatto alle operazioni sul filesystem.
+
+    Su Windows usa il prefisso extended-length ``\\?\`` per evitare falsi
+    negativi quando i file DICOM hanno percorsi piu' lunghi di 260 caratteri.
+    """
+    if os.name != "nt":
+        return path
+
+    path = path.expanduser()
+    try:
+        absolute_path = path.resolve(strict=False)
+    except OSError:
+        absolute_path = path.absolute()
+
+    path_text = str(absolute_path)
+    if path_text.startswith("\\\\?\\"):
+        return Path(path_text)
+    if path_text.startswith("\\\\"):
+        return Path("\\\\?\\UNC\\" + path_text.lstrip("\\"))
+    return Path("\\\\?\\" + path_text)
+
+
+def _windows_path_hint(path: Path) -> str:
+    if os.name != "nt":
+        return ""
+
+    return (
+        " Su Windows puo' succedere con percorsi molto lunghi: abilita "
+        "LongPathsEnabled oppure sposta i dati in una cartella piu' corta, "
+        "ad esempio C:\\radiomic-data."
+    )
+
+
+def _candidate_dicom_files(folder: Path) -> list[Path]:
+    filesystem_folder = _filesystem_path(folder)
+    try:
+        files = sorted(
+            (file for file in filesystem_folder.iterdir() if file.is_file()),
+            key=lambda file: file.name.lower(),
+        )
+    except OSError as exc:
+        raise OSError(
+            f"Impossibile leggere la cartella DICOM '{_safe_resolve(folder)}': "
+            f"{exc}.{_windows_path_hint(folder)}"
+        ) from exc
+
+    dcm_files = [file for file in files if file.suffix.lower() == ".dcm"]
+    return dcm_files or files
 
 class DataConfig(BaseModel):
     """Percorsi dei dati in input e output."""
@@ -216,15 +275,31 @@ class StatoMicrosatellitare(str, Enum):
 
 class Paziente(BaseModel):
     nome: str
-    path_ct: DirectoryPath
-    path_rt: DirectoryPath
+    path_ct: Path
+    path_rt: Path
     stato_microsatellitare: StatoMicrosatellitare | None = None
 
     @field_validator("path_ct", "path_rt")
     @classmethod
     def ensure_path_contains_dicoms(cls, value: Path) -> Path:
-        if not any(value.glob("*.dcm")):
-            raise ValueError(f"La cartella '{value}' non contiene file DICOM .dcm")
+        filesystem_path = _filesystem_path(value)
+
+        if not filesystem_path.exists():
+            raise ValueError(
+                f"La cartella DICOM non esiste: {_safe_resolve(value)}"
+                f"{_windows_path_hint(value)}"
+            )
+
+        if not filesystem_path.is_dir():
+            raise ValueError(
+                f"Il percorso DICOM non e' una cartella: {_safe_resolve(value)}"
+            )
+
+        if not _candidate_dicom_files(value):
+            raise ValueError(
+                f"La cartella '{value}' non contiene file DICOM leggibili."
+                f"{_windows_path_hint(value)}"
+            )
         return value
         
 
@@ -249,30 +324,25 @@ class Paziente(BaseModel):
                 valido.
         """
         cartella = Path(self.path_rt if use_rt else self.path_ct)
+        cartella_filesystem = _filesystem_path(cartella)
 
-        if not cartella.exists():
+        if not cartella_filesystem.exists():
             raise FileNotFoundError(
-                f"La cartella DICOM non esiste: {cartella.resolve()}"
+                f"La cartella DICOM non esiste: {_safe_resolve(cartella)}"
+                f"{_windows_path_hint(cartella)}"
             )
 
-        if not cartella.is_dir():
+        if not cartella_filesystem.is_dir():
             raise NotADirectoryError(
-                f"Il percorso DICOM non è una cartella: {cartella.resolve()}"
+                f"Il percorso DICOM non è una cartella: {_safe_resolve(cartella)}"
             )
 
-        # suffix.lower() gestisce sia .dcm sia .DCM.
-        file_dicom = sorted(
-            (
-                file
-                for file in cartella.iterdir()
-                if file.is_file() and file.suffix.lower() == ".dcm"
-            ),
-            key=lambda file: file.name.lower(),
-        )
+        file_dicom = _candidate_dicom_files(cartella)
 
         if not file_dicom:
             raise FileNotFoundError(
-                f"Nessun file .dcm trovato in: {cartella.resolve()}"
+                f"Nessun file trovato in: {_safe_resolve(cartella)}"
+                f"{_windows_path_hint(cartella)}"
             )
 
         file_vuoti: list[Path] = []
