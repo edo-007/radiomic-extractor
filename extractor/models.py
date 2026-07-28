@@ -18,7 +18,9 @@ from pydantic import (
     DirectoryPath, 
     Field, 
     FilePath, 
-    field_validator
+    ValidationInfo,
+    field_validator,
+    model_validator,
 )
 from pydicom.datadict import keyword_for_tag
 from pydicom.dataset import Dataset
@@ -66,6 +68,45 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_FILE = PROJECT_ROOT / "config_extractor.yaml"
 _DICOM_METADATA_SERVICE = DicomMetadataService()
 METADATA_COLUMN_PREFIX = "metadata_"
+IBSI_COMPLIANT_FILTER_KERNELS = {
+    "mean",
+    "laplacian_of_gaussian",
+    "log",
+    "laws",
+    "gabor",
+    "separable_wavelet",
+    "nonseparable_wavelet",
+}
+RESPONSE_MAP_FEATURE_FAMILIES = {
+    "local_intensity",
+    "statistics",
+    "statistical",
+    "intensity_histogram",
+    "ih",
+    "intensity_volume_histogram",
+    "ivh",
+    "glcm",
+    "glrlm",
+    "glszm",
+    "gldzm",
+    "ngtdm",
+    "ngldm",
+    "all",
+    "none",
+}
+BOUNDARY_CONDITIONS = {"reflect", "constant", "nearest", "mirror", "wrap"}
+FILTER_POOLING_METHODS = {"max", "min", "mean", "sum"}
+LOG_POOLING_METHODS = FILTER_POOLING_METHODS | {"none"}
+FILTER_RESPONSE_TYPES = {
+    "modulus",
+    "abs",
+    "magnitude",
+    "angle",
+    "phase",
+    "argument",
+    "real",
+    "imaginary",
+}
 
 
 def _safe_resolve(path: Path) -> Path:
@@ -82,6 +123,32 @@ def _windows_path_hint(path: Path) -> str:
 
 def _candidate_dicom_files(folder: Path) -> list[Path]:
     return candidate_dicom_files(folder)
+
+
+def _normalise_config_string_list(
+    value: Any,
+    *,
+    lower: bool = True,
+) -> list[str] | None:
+    if value is None:
+        return None
+
+    values = value if isinstance(value, (list, tuple, set)) else [value]
+    normalised_values: list[str] = []
+    for item in values:
+        text = str(item).strip()
+        if not text:
+            raise ValueError("Le liste di configurazione non possono contenere valori vuoti")
+        normalised_values.append(text.lower() if lower else text)
+    return normalised_values
+
+
+def _is_empty_setting(value: Any) -> bool:
+    return value is None or (isinstance(value, list) and len(value) == 0)
+
+
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else [value]
 
 
 def _normalise_metadata_name(value: str) -> str:
@@ -120,7 +187,6 @@ class DataConfig(BaseModel):
 class MirpConfig(BaseModel):
     """Parametri necessari per l'estrazione radiomica con MIRP."""
 
-    ibsi_compliant: bool = True
     bin_width: float = Field(25.0, gt=0)
     voxel_spacing: list[float] = Field(default_factory=lambda: [1.0, 1.0, 1.0])
     roi_names: list[str] | None = None
@@ -130,6 +196,36 @@ class MirpConfig(BaseModel):
     feature_families: list[str] = Field(
         default_factory=lambda: ["statistics", "intensity_histogram"]
     )
+    filter_kernels: list[str] | None = None
+    response_map_feature_families: list[str] = Field(default_factory=lambda: ["statistics"])
+    response_map_discretisation_n_bins: int | list[int] = 16
+    boundary_condition: str = "mirror"
+    mean_filter_kernel_size: int | list[int] | None = None
+    laplacian_of_gaussian_sigma: float | list[float] | None = None
+    laplacian_of_gaussian_kernel_truncate: float = Field(4.0, gt=0)
+    laplacian_of_gaussian_pooling_method: str = "none"
+    laws_kernel: str | list[str] | None = None
+    laws_delta: int | list[int] = 7
+    laws_compute_energy: bool = True
+    laws_rotation_invariance: bool = True
+    laws_pooling_method: str = "max"
+    gabor_sigma: float | list[float] | None = None
+    gabor_lambda: float | list[float] | None = None
+    gabor_gamma: float | list[float] = 1.0
+    gabor_theta: float | list[float] = 0.0
+    gabor_theta_step: float | None = Field(default=None, gt=0)
+    gabor_response: str = "modulus"
+    gabor_rotation_invariance: bool = False
+    gabor_pooling_method: str = "max"
+    separable_wavelet_families: str | list[str] | None = None
+    separable_wavelet_set: str | list[str] | None = None
+    separable_wavelet_stationary: bool = True
+    separable_wavelet_decomposition_level: int | list[int] = 1
+    separable_wavelet_rotation_invariance: bool = True
+    separable_wavelet_pooling_method: str = "max"
+    nonseparable_wavelet_families: str | list[str] | None = None
+    nonseparable_wavelet_decomposition_level: int | list[int] = 1
+    nonseparable_wavelet_response: str = "real"
     by_slice: bool = False
     num_processes: int | None = Field(
         1,
@@ -148,6 +244,204 @@ class MirpConfig(BaseModel):
         if any(spacing <= 0 for spacing in value):
             raise ValueError("voxel_spacing deve contenere solo valori positivi")
         return value
+
+    @field_validator("filter_kernels", mode="before")
+    @classmethod
+    def normalise_filter_kernels(cls, value: Any) -> list[str] | None:
+        return _normalise_config_string_list(value)
+
+    @field_validator("filter_kernels")
+    @classmethod
+    def validate_filter_kernels(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return value
+
+        invalid_filters = sorted(set(value) - IBSI_COMPLIANT_FILTER_KERNELS)
+        if invalid_filters:
+            valid_filters = ", ".join(sorted(IBSI_COMPLIANT_FILTER_KERNELS))
+            raise ValueError(
+                "filter_kernels contiene filtri non IBSI-compliant o non supportati: "
+                f"{', '.join(invalid_filters)}. Valori ammessi: {valid_filters}"
+            )
+        return value
+
+    @field_validator("response_map_feature_families", mode="before")
+    @classmethod
+    def normalise_response_map_feature_families(cls, value: Any) -> list[str]:
+        values = _normalise_config_string_list(value)
+        return values or ["statistics"]
+
+    @field_validator("response_map_feature_families")
+    @classmethod
+    def validate_response_map_feature_families(cls, value: list[str]) -> list[str]:
+        invalid_families = sorted(set(value) - RESPONSE_MAP_FEATURE_FAMILIES)
+        if invalid_families:
+            valid_families = ", ".join(sorted(RESPONSE_MAP_FEATURE_FAMILIES))
+            raise ValueError(
+                "response_map_feature_families contiene famiglie non supportate: "
+                f"{', '.join(invalid_families)}. Valori ammessi: {valid_families}"
+            )
+        return value
+
+    @field_validator("boundary_condition")
+    @classmethod
+    def validate_boundary_condition(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in BOUNDARY_CONDITIONS:
+            valid_values = ", ".join(sorted(BOUNDARY_CONDITIONS))
+            raise ValueError(
+                f"boundary_condition deve essere uno tra: {valid_values}"
+            )
+        return value
+
+    @field_validator(
+        "laplacian_of_gaussian_pooling_method",
+    )
+    @classmethod
+    def validate_log_pooling_method(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in LOG_POOLING_METHODS:
+            valid_values = ", ".join(sorted(LOG_POOLING_METHODS))
+            raise ValueError(
+                "laplacian_of_gaussian_pooling_method deve essere uno tra: "
+                f"{valid_values}"
+            )
+        return value
+
+    @field_validator(
+        "laws_pooling_method",
+        "gabor_pooling_method",
+        "separable_wavelet_pooling_method",
+    )
+    @classmethod
+    def validate_filter_pooling_method(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in FILTER_POOLING_METHODS:
+            valid_values = ", ".join(sorted(FILTER_POOLING_METHODS))
+            raise ValueError(f"Il metodo di pooling deve essere uno tra: {valid_values}")
+        return value
+
+    @field_validator("gabor_response", "nonseparable_wavelet_response")
+    @classmethod
+    def validate_filter_response_type(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in FILTER_RESPONSE_TYPES:
+            valid_values = ", ".join(sorted(FILTER_RESPONSE_TYPES))
+            raise ValueError(f"La risposta del filtro deve essere una tra: {valid_values}")
+        return value
+
+    @field_validator(
+        "response_map_discretisation_n_bins",
+        "mean_filter_kernel_size",
+        "separable_wavelet_decomposition_level",
+        "nonseparable_wavelet_decomposition_level",
+    )
+    @classmethod
+    def validate_positive_integer_setting(
+        cls,
+        value: int | list[int] | None,
+        info: ValidationInfo,
+    ) -> int | list[int] | None:
+        if value is None:
+            return value
+
+        values = _as_list(value)
+        if any(isinstance(item, bool) or not isinstance(item, int) for item in values):
+            raise ValueError("Il parametro deve essere un intero o una lista di interi")
+        minimum_value = 2 if info.field_name == "response_map_discretisation_n_bins" else 1
+        if any(item < minimum_value for item in values):
+            raise ValueError(
+                "Il parametro deve contenere solo interi maggiori o uguali a "
+                f"{minimum_value}"
+            )
+        return value
+
+    @field_validator("laws_delta")
+    @classmethod
+    def validate_laws_delta(cls, value: int | list[int]) -> int | list[int]:
+        values = _as_list(value)
+        if any(isinstance(item, bool) or not isinstance(item, int) for item in values):
+            raise ValueError("laws_delta deve essere un intero o una lista di interi")
+        if any(item < 0 for item in values):
+            raise ValueError("laws_delta deve contenere solo interi maggiori o uguali a 0")
+        return value
+
+    @field_validator(
+        "laplacian_of_gaussian_sigma",
+        "gabor_sigma",
+        "gabor_lambda",
+        "gabor_gamma",
+    )
+    @classmethod
+    def validate_positive_float_setting(
+        cls,
+        value: float | list[float] | None,
+    ) -> float | list[float] | None:
+        if value is None:
+            return value
+
+        values = _as_list(value)
+        if any(isinstance(item, bool) or not isinstance(item, (float, int)) for item in values):
+            raise ValueError("Il parametro deve essere numerico o una lista di numeri")
+        if any(float(item) <= 0.0 for item in values):
+            raise ValueError("Il parametro deve contenere solo valori maggiori di 0")
+        return value
+
+    @field_validator(
+        "laws_kernel",
+        "separable_wavelet_families",
+        "separable_wavelet_set",
+        "nonseparable_wavelet_families",
+        mode="before",
+    )
+    @classmethod
+    def normalise_optional_string_setting(cls, value: Any) -> list[str] | None:
+        return _normalise_config_string_list(value)
+
+    @model_validator(mode="after")
+    def validate_required_filter_settings(self) -> "MirpConfig":
+        filters = set(self.filter_kernels or [])
+        missing_settings: list[str] = []
+
+        if "mean" in filters and _is_empty_setting(self.mean_filter_kernel_size):
+            missing_settings.append("mean_filter_kernel_size per il filtro mean")
+        if {"laplacian_of_gaussian", "log"} & filters and _is_empty_setting(self.laplacian_of_gaussian_sigma):
+            missing_settings.append("laplacian_of_gaussian_sigma per il filtro laplacian_of_gaussian/log")
+        if "laws" in filters and _is_empty_setting(self.laws_kernel):
+            missing_settings.append("laws_kernel per il filtro laws")
+        if "gabor" in filters:
+            if _is_empty_setting(self.gabor_sigma):
+                missing_settings.append("gabor_sigma per il filtro gabor")
+            if _is_empty_setting(self.gabor_lambda):
+                missing_settings.append("gabor_lambda per il filtro gabor")
+        if "separable_wavelet" in filters:
+            if _is_empty_setting(self.separable_wavelet_families):
+                missing_settings.append("separable_wavelet_families per il filtro separable_wavelet")
+            if _is_empty_setting(self.separable_wavelet_set):
+                missing_settings.append("separable_wavelet_set per il filtro separable_wavelet")
+        if "nonseparable_wavelet" in filters and _is_empty_setting(self.nonseparable_wavelet_families):
+            missing_settings.append("nonseparable_wavelet_families per il filtro nonseparable_wavelet")
+
+        if missing_settings:
+            raise ValueError(
+                "La configurazione MIRP attiva filtri immagine senza i parametri richiesti: "
+                + "; ".join(missing_settings)
+            )
+
+        if self.gabor_theta_step is not None:
+            theta_values = _as_list(self.gabor_theta)
+            if len(theta_values) > 1:
+                raise ValueError(
+                    "gabor_theta deve avere un solo valore quando usi gabor_theta_step"
+                )
+
+            if not (360.0 / self.gabor_theta_step).is_integer():
+                raise ValueError(
+                    "gabor_theta_step deve dividere il cerchio in parti uguali; "
+                    f"il valore attuale creerebbe {360.0 / self.gabor_theta_step} parti"
+                )
+
+        return self
 
     @field_validator("num_processes")
     @classmethod
@@ -183,12 +477,13 @@ class MirpConfig(BaseModel):
             "image_modality": "ct",
             "mask_modality": "rtstruct",
             "association_strategy": "frame_of_reference",
-            "ibsi_compliant": self.ibsi_compliant,
+            "ibsi_compliant": True,
             "by_slice": self.by_slice,
             "new_spacing": self.voxel_spacing,
             "base_feature_families": self.feature_families,
             "base_discretisation_method": "fixed_bin_size",
             "base_discretisation_bin_width": float(self.bin_width),
+            "texture_feature_pooling_method": "average",
         }
 
         if self.roi_names:
@@ -196,6 +491,54 @@ class MirpConfig(BaseModel):
 
         if self.resegmentation_intensity_range:
             kwargs["resegmentation_intensity_range"] = self.resegmentation_intensity_range
+
+        if self.filter_kernels:
+            filters = set(self.filter_kernels)
+            kwargs.update({
+                "filter_kernels": self.filter_kernels,
+                "response_map_feature_families": self.response_map_feature_families,
+                "response_map_discretisation_method": "fixed_bin_number",
+                "response_map_discretisation_n_bins": self.response_map_discretisation_n_bins,
+                "boundary_condition": self.boundary_condition,
+            })
+
+            if "mean" in filters:
+                kwargs["mean_filter_kernel_size"] = self.mean_filter_kernel_size
+
+            if {"laplacian_of_gaussian", "log"} & filters:
+                kwargs["laplacian_of_gaussian_sigma"] = self.laplacian_of_gaussian_sigma
+                kwargs["laplacian_of_gaussian_kernel_truncate"] = self.laplacian_of_gaussian_kernel_truncate
+                kwargs["laplacian_of_gaussian_pooling_method"] = self.laplacian_of_gaussian_pooling_method
+
+            if "laws" in filters:
+                kwargs["laws_kernel"] = self.laws_kernel
+                kwargs["laws_delta"] = self.laws_delta
+                kwargs["laws_compute_energy"] = self.laws_compute_energy
+                kwargs["laws_rotation_invariance"] = self.laws_rotation_invariance
+                kwargs["laws_pooling_method"] = self.laws_pooling_method
+
+            if "gabor" in filters:
+                kwargs["gabor_sigma"] = self.gabor_sigma
+                kwargs["gabor_lambda"] = self.gabor_lambda
+                kwargs["gabor_gamma"] = self.gabor_gamma
+                kwargs["gabor_theta"] = self.gabor_theta
+                kwargs["gabor_theta_step"] = self.gabor_theta_step
+                kwargs["gabor_response"] = self.gabor_response
+                kwargs["gabor_rotation_invariance"] = self.gabor_rotation_invariance
+                kwargs["gabor_pooling_method"] = self.gabor_pooling_method
+
+            if "separable_wavelet" in filters:
+                kwargs["separable_wavelet_families"] = self.separable_wavelet_families
+                kwargs["separable_wavelet_set"] = self.separable_wavelet_set
+                kwargs["separable_wavelet_stationary"] = self.separable_wavelet_stationary
+                kwargs["separable_wavelet_decomposition_level"] = self.separable_wavelet_decomposition_level
+                kwargs["separable_wavelet_rotation_invariance"] = self.separable_wavelet_rotation_invariance
+                kwargs["separable_wavelet_pooling_method"] = self.separable_wavelet_pooling_method
+
+            if "nonseparable_wavelet" in filters:
+                kwargs["nonseparable_wavelet_families"] = self.nonseparable_wavelet_families
+                kwargs["nonseparable_wavelet_decomposition_level"] = self.nonseparable_wavelet_decomposition_level
+                kwargs["nonseparable_wavelet_response"] = self.nonseparable_wavelet_response
 
         return kwargs
 

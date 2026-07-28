@@ -12,6 +12,10 @@ Avvio:
 python -m extractor.main
 ```
 
+Prima dell'estrazione il comando stampa un recap con numero e nomi delle feature
+radiomiche previste, salva la lista completa in `results/feature_preview.csv` e
+chiede conferma con `Continuare con l'estrazione radiomica? [s/N]`.
+
 Info DICOM:
 
 ```bash
@@ -43,3 +47,27 @@ dicom_metadata:
 ```
 
 La colonna generata nel CSV sara' `metadata_study_date`.
+
+Filtri MIRP IBSI-compliant:
+
+```yaml
+mirp:
+  # Il codice forza sempre ibsi_compliant=true.
+  filter_kernels:
+    - laplacian_of_gaussian
+    - gabor
+  response_map_feature_families:
+    - statistics
+    # - intensity_histogram
+    # - glcm
+  response_map_discretisation_n_bins: 16
+  laplacian_of_gaussian_sigma: [5.0, 10.0]
+  gabor_sigma: [2.0, 4.0]
+  gabor_lambda: [1.0, 2.0]
+```
+
+Sono esposti solo i filtri IBSI-compliant: `mean`,
+`laplacian_of_gaussian`/`log`, `laws`, `gabor`, `separable_wavelet` e
+`nonseparable_wavelet`. Gaussian, Laplace semplice (`laplace`/`laplacian`),
+Sobel, Prewitt, LBP e le varianti Riesz non sono configurabili perche'
+richiedono `ibsi_compliant=false` o non hanno reference values IBSI.

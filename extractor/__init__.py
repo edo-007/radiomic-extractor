@@ -7,6 +7,11 @@ from .dicom_metadata_service import (
     DicomTagReference,
     DicomTagSpec,
 )
+from .feature_preview_service import (
+    RadiomicFeaturePreview,
+    RadiomicFeaturePreviewGroup,
+    RadiomicFeaturePreviewService,
+)
 
 __all__ = [
     "DicomMetadataEntry",
@@ -14,4 +19,7 @@ __all__ = [
     "DicomMetadataService",
     "DicomTagReference",
     "DicomTagSpec",
+    "RadiomicFeaturePreview",
+    "RadiomicFeaturePreviewGroup",
+    "RadiomicFeaturePreviewService",
 ]
