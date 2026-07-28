@@ -959,10 +959,11 @@ class ClinicalDataLoader(BaseModel):
         return records
 
     def assign_status(self, patients: list[Paziente]) -> list[Paziente]:
-        """Restituisce copie dei pazienti arricchite con il relativo target clinico."""
+        """Restituisce solo i pazienti con target clinico nel CSV."""
         records = self._read_records()
         enriched_patients: list[Paziente] = []
         seen_dicom_ids: set[str] = set()
+        ignored_without_label = 0
 
         for patient in patients:
             ct_id = self._normalise_id(patient.get_patient_id())
@@ -981,12 +982,12 @@ class ClinicalDataLoader(BaseModel):
 
             record = records.get(ct_id)
             if record is None:
+                ignored_without_label += 1
                 logger.warning(
-                    "Nessun dato clinico nel CSV per '%s' (PatientID=%s)",
+                    "Nessun dato clinico nel CSV per '%s' (PatientID=%s): paziente ignorato",
                     patient.nome,
                     ct_id,
                 )
-                enriched_patients.append(patient)
                 continue
 
             csv_name, status, csv_row_number = record
@@ -1025,9 +1026,10 @@ class ClinicalDataLoader(BaseModel):
             )
 
         logger.info(
-            "Stato microsatellitare associato a %d pazienti su %d",
-            sum(patient.stato_microsatellitare is not None for patient in enriched_patients),
+            "Stato microsatellitare associato a %d pazienti su %d; %d pazienti ignorati senza label",
             len(enriched_patients),
+            len(patients),
+            ignored_without_label,
         )
         return enriched_patients
 

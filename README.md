@@ -16,6 +16,9 @@ Prima dell'estrazione il comando stampa un recap con numero e nomi delle feature
 radiomiche previste, salva la lista completa in `results/feature_preview.csv` e
 chiede conferma con `Continuare con l'estrazione radiomica? [s/N]`.
 
+Se `patients_csv` e' configurato, i pazienti non presenti nel CSV clinico
+vengono ignorati.
+
 Info DICOM:
 
 ```bash
