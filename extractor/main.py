@@ -1,9 +1,52 @@
 from collections import Counter
 
 try:
-    from .models import MirpExtractor, carica_pazienti, load_configuration
+    from .logger_conf import logger
+    from .models import (
+        DicomMetadataConfig,
+        MirpExtractor,
+        carica_pazienti,
+        load_configuration,
+    )
 except ImportError:
-    from models import MirpExtractor, carica_pazienti, load_configuration
+    from logger_conf import logger
+    from models import (
+        DicomMetadataConfig,
+        MirpExtractor,
+        carica_pazienti,
+        load_configuration,
+    )
+
+from rich.console import Console
+from rich.table import Table
+
+
+def print_dicom_metadata_summary(metadata_config: DicomMetadataConfig) -> None:
+    tags = metadata_config.active_tags()
+    if not tags:
+        logger.info("Metadati DICOM: nessun tag configurato per il CSV finale.")
+        return
+
+    logger.info("Metadati DICOM configurati per il CSV finale: %d tag", len(tags))
+    table = Table(
+        title="[bold]METADATI DICOM - TAG CONFIGURATI[cyan]",
+        show_header=True,
+        header_style="bold",
+    )
+    table.add_column("Colonna CSV", style="cyan", overflow="fold")
+    table.add_column("Sorgente", style="green", no_wrap=True)
+    table.add_column("Tag", style="magenta", no_wrap=True)
+    table.add_column("Keyword", style="yellow", overflow="fold")
+
+    for tag in tags:
+        table.add_row(
+            tag.output_column,
+            tag.source.upper(),
+            tag.tag_text,
+            tag.keyword or "-",
+        )
+
+    Console(width=140).print(table)
 
 
 def main() -> None:
@@ -62,6 +105,8 @@ def main() -> None:
     extractor = MirpExtractor(config=mirp_config)
     output_dir = config.data.ensure_output_dir()
 
+    print_dicom_metadata_summary(config.dicom_metadata)
+
     print(
         f"Avvio l'estrazione radiomica per {len(pazienti)} pazienti "
         "in modalità sequenziale."
@@ -86,6 +131,7 @@ def main() -> None:
         risultati=risultati,
         pazienti=pazienti,
         csv_path=csv_path,
+        metadata_config=config.dicom_metadata,
     )
     print(f"Feature scritte in: {csv_path} ({numero_righe} righe).")
 

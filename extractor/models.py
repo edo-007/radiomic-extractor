@@ -2,31 +2,52 @@ from __future__ import annotations
 
 import csv
 import logging
-import os
 import re
 from collections import defaultdict
 from enum import Enum
 from math import isnan
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 
-import pydicom
 import yaml
 
 from pydantic import (
     AliasChoices,
     BaseModel, 
+    ConfigDict,
     DirectoryPath, 
     Field, 
     FilePath, 
     field_validator
 )
+from pydicom.datadict import keyword_for_tag
 from pydicom.dataset import Dataset
-from pydicom.errors import InvalidDicomError
 
 try:
+    from .dicom_metadata_service import (
+        DEFAULT_MISSING_VALUE,
+        DicomMetadataRecord,
+        DicomMetadataService,
+        DicomTagReference,
+        DicomTagSpec,
+        candidate_dicom_files,
+        filesystem_path,
+        safe_resolve,
+        windows_path_hint,
+    )
     from .logger_conf import logger
 except ImportError:
+    from dicom_metadata_service import (
+        DEFAULT_MISSING_VALUE,
+        DicomMetadataRecord,
+        DicomMetadataService,
+        DicomTagReference,
+        DicomTagSpec,
+        candidate_dicom_files,
+        filesystem_path,
+        safe_resolve,
+        windows_path_hint,
+    )
     from logger_conf import logger
 
 from rich.console import Console
@@ -43,64 +64,37 @@ from rich.table import Table
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_FILE = PROJECT_ROOT / "config_extractor.yaml"
+_DICOM_METADATA_SERVICE = DicomMetadataService()
+METADATA_COLUMN_PREFIX = "metadata_"
 
 
 def _safe_resolve(path: Path) -> Path:
-    try:
-        return path.resolve()
-    except OSError:
-        return path
+    return safe_resolve(path)
 
 
 def _filesystem_path(path: Path) -> Path:
-    r"""Restituisce un path adatto alle operazioni sul filesystem.
-
-    Su Windows usa il prefisso extended-length ``\\?\`` per evitare falsi
-    negativi quando i file DICOM hanno percorsi piu' lunghi di 260 caratteri.
-    """
-    if os.name != "nt":
-        return path
-
-    path = path.expanduser()
-    try:
-        absolute_path = path.resolve(strict=False)
-    except OSError:
-        absolute_path = path.absolute()
-
-    path_text = str(absolute_path)
-    if path_text.startswith("\\\\?\\"):
-        return Path(path_text)
-    if path_text.startswith("\\\\"):
-        return Path("\\\\?\\UNC\\" + path_text.lstrip("\\"))
-    return Path("\\\\?\\" + path_text)
+    return filesystem_path(path)
 
 
 def _windows_path_hint(path: Path) -> str:
-    if os.name != "nt":
-        return ""
-
-    return (
-        " Su Windows puo' succedere con percorsi molto lunghi: abilita "
-        "LongPathsEnabled oppure sposta i dati in una cartella piu' corta, "
-        "ad esempio C:\\radiomic-data."
-    )
+    return windows_path_hint(path)
 
 
 def _candidate_dicom_files(folder: Path) -> list[Path]:
-    filesystem_folder = _filesystem_path(folder)
-    try:
-        files = sorted(
-            (file for file in filesystem_folder.iterdir() if file.is_file()),
-            key=lambda file: file.name.lower(),
-        )
-    except OSError as exc:
-        raise OSError(
-            f"Impossibile leggere la cartella DICOM '{_safe_resolve(folder)}': "
-            f"{exc}.{_windows_path_hint(folder)}"
-        ) from exc
+    return candidate_dicom_files(folder)
 
-    dcm_files = [file for file in files if file.suffix.lower() == ".dcm"]
-    return dcm_files or files
+
+def _normalise_metadata_name(value: str) -> str:
+    value = value.strip()
+    if not value:
+        raise ValueError("Il nome del metadato DICOM non puo' essere vuoto")
+
+    value = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", value)
+    value = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
+    value = re.sub(r"[^A-Za-z0-9]+", "_", value).strip("_").lower()
+    if not value:
+        raise ValueError("Il nome del metadato DICOM non contiene caratteri validi")
+    return value
 
 class DataConfig(BaseModel):
     """Percorsi dei dati in input e output."""
@@ -206,10 +200,120 @@ class MirpConfig(BaseModel):
         return kwargs
 
 
+class DicomMetadataTagConfig(BaseModel):
+    """Singolo tag DICOM da aggiungere al CSV delle feature."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tag: str
+    source: Literal["ct", "rt"] = "ct"
+    missing_value: Any = DEFAULT_MISSING_VALUE
+
+    @field_validator("tag")
+    @classmethod
+    def validate_tag(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Il tag DICOM non puo' essere vuoto")
+
+        DicomMetadataService.resolve_tag(value)
+        return value
+
+    @field_validator("source", mode="before")
+    @classmethod
+    def normalise_source(cls, value: Any) -> str:
+        if value is None:
+            return "ct"
+
+        source = str(value).strip().lower()
+        if source in {"rtstruct", "rt_struct"}:
+            return "rt"
+        return source
+
+    @property
+    def resolved_tag(self):
+        return DicomMetadataService.resolve_tag(self.tag)
+
+    @property
+    def tag_text(self) -> str:
+        return DicomMetadataService.format_tag(self.resolved_tag)
+
+    @property
+    def keyword(self) -> str:
+        return keyword_for_tag(self.resolved_tag) or ""
+
+    @property
+    def output_column(self) -> str:
+        base_name = self.keyword or self.tag
+        column = _normalise_metadata_name(base_name)
+        if column.startswith(METADATA_COLUMN_PREFIX):
+            return column
+        return f"{METADATA_COLUMN_PREFIX}{column}"
+
+    def to_dicom_tag_spec(self) -> DicomTagSpec:
+        return DicomTagSpec(
+            tag=self.tag,
+            key=self.output_column,
+            missing_value=self.missing_value,
+        )
+
+
+class DicomMetadataConfig(BaseModel):
+    """Configurazione dei metadati DICOM da aggiungere al CSV."""
+
+    enabled: bool = True
+    tags: list[DicomMetadataTagConfig] = Field(default_factory=list)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def normalise_tags(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [{"tag": value}]
+        if not isinstance(value, list):
+            raise TypeError("dicom_metadata.tags deve essere una lista")
+
+        normalised_tags: list[Any] = []
+        for item in value:
+            if isinstance(item, str):
+                normalised_tags.append({"tag": item})
+            else:
+                normalised_tags.append(item)
+        return normalised_tags
+
+    @field_validator("tags")
+    @classmethod
+    def validate_unique_columns(
+        cls,
+        value: list[DicomMetadataTagConfig],
+    ) -> list[DicomMetadataTagConfig]:
+        columns = [tag.output_column for tag in value]
+        duplicates = sorted(
+            column for column in set(columns) if columns.count(column) > 1
+        )
+        if duplicates:
+            raise ValueError(
+                "Colonne metadata DICOM duplicate: " + ", ".join(duplicates)
+            )
+        return value
+
+    def active_tags(self) -> list[DicomMetadataTagConfig]:
+        if not self.enabled:
+            return []
+        return self.tags
+
+    def has_tags(self) -> bool:
+        return bool(self.active_tags())
+
+
 class GlobalConfig(BaseModel):
     """Schema completo del file YAML."""
 
     data: DataConfig
+    dicom_metadata: DicomMetadataConfig = Field(
+        default_factory=DicomMetadataConfig
+    )
     mirp: MirpConfig = Field(default_factory=MirpConfig)
     n_test: int | Literal[False] = Field(
         default=False,
@@ -324,97 +428,37 @@ class Paziente(BaseModel):
                 valido.
         """
         cartella = Path(self.path_rt if use_rt else self.path_ct)
-        cartella_filesystem = _filesystem_path(cartella)
+        return _DICOM_METADATA_SERVICE.read_first_valid_dataset(cartella).dataset
 
-        if not cartella_filesystem.exists():
-            raise FileNotFoundError(
-                f"La cartella DICOM non esiste: {_safe_resolve(cartella)}"
-                f"{_windows_path_hint(cartella)}"
-            )
+    def get_dicom_metadata_record(
+        self,
+        tags: Iterable[DicomTagSpec | DicomTagReference],
+        use_rt: bool = False,
+    ) -> DicomMetadataRecord:
+        """Estrae e memorizza metadati DICOM per i tag richiesti."""
+        cartella = Path(self.path_rt if use_rt else self.path_ct)
+        return _DICOM_METADATA_SERVICE.extract_from_folder(cartella, tags)
 
-        if not cartella_filesystem.is_dir():
-            raise NotADirectoryError(
-                f"Il percorso DICOM non è una cartella: {_safe_resolve(cartella)}"
-            )
+    def get_dicom_metadata(
+        self,
+        tags: Iterable[DicomTagSpec | DicomTagReference],
+        use_rt: bool = False,
+    ) -> dict[str, Any]:
+        """Restituisce i metadati DICOM come dizionario key -> valore."""
+        return self.get_dicom_metadata_record(tags=tags, use_rt=use_rt).as_dict()
 
-        file_dicom = _candidate_dicom_files(cartella)
-
-        if not file_dicom:
-            raise FileNotFoundError(
-                f"Nessun file trovato in: {_safe_resolve(cartella)}"
-                f"{_windows_path_hint(cartella)}"
-            )
-
-        file_vuoti: list[Path] = []
-        file_non_validi: list[tuple[Path, str]] = []
-
-        for file_path in file_dicom:
-            try:
-                dimensione = file_path.stat().st_size
-            except OSError as exc:
-                file_non_validi.append(
-                    (file_path, f"impossibile leggere le informazioni del file: {exc}")
-                )
-                continue
-
-            if dimensione == 0:
-                file_vuoti.append(file_path)
-                continue
-
-            try:
-                dataset = pydicom.dcmread(
-                    file_path,
-                    stop_before_pixels=True,
-                    force=False,
-                )
-            except (InvalidDicomError, OSError) as exc:
-                file_non_validi.append((file_path, str(exc)))
-                continue
-
-            # Controllo minimo per evitare di accettare dataset privi
-            # dei principali identificativi DICOM.
-            identificatori = (
-                "SOPClassUID",
-                "SOPInstanceUID",
-                "StudyInstanceUID",
-                "SeriesInstanceUID",
-            )
-
-            if not any(hasattr(dataset, nome) for nome in identificatori):
-                file_non_validi.append(
-                    (file_path, "mancano i principali identificativi DICOM")
-                )
-                continue
-
-            # print(
-            #     f"File DICOM letto: {file_path.resolve()} "
-            #     f"({dimensione} byte)"
-            # )
-
-            return dataset
-
-        dettagli: list[str] = []
-
-        if file_vuoti:
-            dettagli.append(
-                "File vuoti ignorati:\n"
-                + "\n".join(f"- {file.name}" for file in file_vuoti)
-            )
-
-        if file_non_validi:
-            dettagli.append(
-                "File non validi ignorati:\n"
-                + "\n".join(
-                    f"- {file.name}: {errore}"
-                    for file, errore in file_non_validi
-                )
-            )
-
-        descrizione_errori = "\n\n".join(dettagli)
-
-        raise InvalidDicomError(
-            f"Nessun file DICOM valido trovato in {cartella.resolve()}."
-            + (f"\n\n{descrizione_errori}" if descrizione_errori else "")
+    def get_dicom_tag_value(
+        self,
+        tag: DicomTagReference,
+        use_rt: bool = False,
+        default: Any = DEFAULT_MISSING_VALUE,
+    ) -> Any:
+        """Legge un singolo valore DICOM da keyword o tag numerico."""
+        dataset = self._get_dicom_dataset(use_rt=use_rt)
+        return _DICOM_METADATA_SERVICE.get_tag_value(
+            dataset=dataset,
+            tag=tag,
+            default=default,
         )
 
     # tag: (0010,0020)
@@ -423,17 +467,12 @@ class Paziente(BaseModel):
 
         Di default legge da path_ct, se use_rt=True legge da path_rt.
         """
-        ds = self._get_dicom_dataset(use_rt)
-
-        # In pydicom puoi usare sia il nome del tag che la tupla esadecimale
-        # Es: ds[0x0010, 0x0020].value
-        return str(ds.PatientID) if "PatientID" in ds else "Non Disponibile"
+        return str(self.get_dicom_tag_value("PatientID", use_rt=use_rt))
 
     # tag: (0010,0010)
     def get_patient_name(self, use_rt: bool = False) -> str:
         """Estrae il Patient Name dal DICOM CT o RTStruct."""
-        ds = self._get_dicom_dataset(use_rt)
-        return str(ds.PatientName) if "PatientName" in ds else "Non Disponibile"
+        return str(self.get_dicom_tag_value("PatientName", use_rt=use_rt))
 
     # tag: (0008,0020)
     def get_study_date(self, use_rt: bool = False) -> str:
@@ -441,8 +480,7 @@ class Paziente(BaseModel):
 
         Di default legge da path_ct, se use_rt=True legge da path_rt.
         """
-        ds = self._get_dicom_dataset(use_rt)
-        return str(ds.StudyDate) if "StudyDate" in ds else "Non Disponibile"
+        return str(self.get_dicom_tag_value("StudyDate", use_rt=use_rt))
 
 
 class PatientScanner(BaseModel):
@@ -790,16 +828,23 @@ class MirpExtractor(BaseModel):
         risultati: dict[str, list[Any] | None],
         pazienti: list[Paziente],
         csv_path: Path,
+        metadata_config: DicomMetadataConfig | None = None,
     ) -> int:
-        """Scrive nome, stato microsatellitare e feature radiomiche in un CSV."""
+        """Scrive metadati paziente, DICOM e feature radiomiche in un CSV."""
         import pandas as pd
 
         frames: list[pd.DataFrame] = []
+        metadata_columns = self._metadata_columns(metadata_config)
+        metadata_by_patient = self._extract_dicom_metadata_by_patient(
+            pazienti=pazienti,
+            metadata_config=metadata_config,
+        )
 
         for paziente in pazienti:
             feature_tables = risultati.get(paziente.nome)
             for feature_table in self._normalise_feature_tables(feature_tables):
                 table = self._keep_radiomic_feature_columns(feature_table)
+                metadata_values = metadata_by_patient.get(paziente.nome, {})
                 table.insert(
                     0,
                     "stato_microsatellitare",
@@ -814,6 +859,17 @@ class MirpExtractor(BaseModel):
                     "nome_cognome",
                     self._format_nome_cognome(paziente.nome),
                 )
+                for index, column in enumerate(metadata_columns, start=2):
+                    if column in table.columns:
+                        raise ValueError(
+                            f"La colonna metadata DICOM '{column}' esiste gia' "
+                            "nella tabella delle feature."
+                        )
+                    table.insert(
+                        index,
+                        column,
+                        metadata_values.get(column, DEFAULT_MISSING_VALUE),
+                    )
                 frames.append(table)
 
         if frames:
@@ -824,12 +880,60 @@ class MirpExtractor(BaseModel):
                 columns=[
                     "nome_cognome",
                     "stato_microsatellitare",
+                    *metadata_columns,
                 ]
             )
 
         features.to_csv(csv_path, sep=";", na_rep="", index=False)
         logger.info("Feature scritte in %s", csv_path)
         return len(features)
+
+    @staticmethod
+    def _metadata_columns(
+        metadata_config: DicomMetadataConfig | None,
+    ) -> list[str]:
+        if metadata_config is None:
+            return []
+        return [tag.output_column for tag in metadata_config.active_tags()]
+
+    def _extract_dicom_metadata_by_patient(
+        self,
+        pazienti: list[Paziente],
+        metadata_config: DicomMetadataConfig | None,
+    ) -> dict[str, dict[str, Any]]:
+        if metadata_config is None or not metadata_config.has_tags():
+            return {}
+
+        return {
+            paziente.nome: self._extract_dicom_metadata_for_patient(
+                paziente=paziente,
+                metadata_config=metadata_config,
+            )
+            for paziente in pazienti
+        }
+
+    @staticmethod
+    def _extract_dicom_metadata_for_patient(
+        paziente: Paziente,
+        metadata_config: DicomMetadataConfig,
+    ) -> dict[str, Any]:
+        metadata: dict[str, Any] = {}
+        for source in ("ct", "rt"):
+            tag_configs = [
+                tag
+                for tag in metadata_config.active_tags()
+                if tag.source == source
+            ]
+            if not tag_configs:
+                continue
+
+            record = paziente.get_dicom_metadata_record(
+                tags=[tag.to_dicom_tag_spec() for tag in tag_configs],
+                use_rt=source == "rt",
+            )
+            metadata.update(record.as_dict())
+
+        return metadata
 
     @staticmethod
     def _normalise_feature_tables(feature_tables: Any) -> list[Any]:

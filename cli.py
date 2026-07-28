@@ -6,16 +6,20 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-import pydicom
 from pydantic import ValidationError
 from pydicom.dataset import Dataset
 from pydicom.errors import InvalidDicomError
 
+from extractor.dicom_metadata_service import (
+    DicomMetadataRecord,
+    DicomMetadataService,
+)
 from extractor.models import ClinicalDataLoader, PatientScanner, Paziente
 
 
 DEFAULT_DATA_ROOT = Path("../radiomic-data")
 DEFAULT_PATIENTS_CSV_NAME = "pazienti.csv"
+DICOM_METADATA_SERVICE = DicomMetadataService()
 
 
 @dataclass(frozen=True)
@@ -34,20 +38,29 @@ class CsvPatientRow:
 
 
 def read_dicom_metadata(dicom_path: Path) -> Dataset:
-    if not dicom_path.exists():
-        raise FileNotFoundError(f"File DICOM non trovato: {dicom_path}")
-    if not dicom_path.is_file():
-        raise IsADirectoryError(f"Il percorso non e' un file: {dicom_path}")
-    if dicom_path.stat().st_size == 0:
-        raise ValueError(f"Il file DICOM e' vuoto: {dicom_path}")
-
-    return pydicom.dcmread(dicom_path, stop_before_pixels=True, force=False)
+    return DICOM_METADATA_SERVICE.read_dataset(dicom_path)
 
 
 def print_dicom_info(dicom_path: Path, dataset: Dataset) -> None:
     print(f"File: {dicom_path.resolve()}")
     print()
     print(dataset)
+
+
+def print_dicom_metadata_record(record: DicomMetadataRecord) -> None:
+    print(f"File: {record.file_path}")
+    print_table(
+        headers=("Key", "Tag", "Keyword", "Valore"),
+        table_rows=[
+            (
+                entry.key,
+                entry.tag,
+                entry.keyword or "-",
+                str(entry.value),
+            )
+            for entry in record.entries.values()
+        ],
+    )
 
 
 def load_patients_from_data(data_root: Path) -> list[Paziente]:
@@ -259,6 +272,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--tag",
+        action="append",
+        default=[],
+        help=(
+            "Tag DICOM da leggere con --infodicom. Accetta keyword "
+            "come PatientID oppure tag come (0010,0020). Ripetibile."
+        ),
+    )
+    parser.add_argument(
         "--cartella-dati",
         metavar="PATH",
         type=Path,
@@ -300,13 +322,22 @@ def main(argv: list[str] | None = None) -> int:
         or args.csv_pazienti is not None
     )
 
+    if args.tag and args.infodicom is None:
+        parser.error("--tag puo' essere usato solo insieme a --infodicom")
+
     if args.infodicom is None and not patient_listing_requested:
         parser.print_help()
         return 0
 
     if args.infodicom is not None:
         try:
-            dataset = read_dicom_metadata(args.infodicom)
+            if args.tag:
+                record = DICOM_METADATA_SERVICE.extract_from_file(
+                    args.infodicom,
+                    args.tag,
+                )
+            else:
+                dataset = read_dicom_metadata(args.infodicom)
         except (
             FileNotFoundError,
             IsADirectoryError,
@@ -316,7 +347,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Errore: {error}", file=sys.stderr)
             return 1
 
-        print_dicom_info(args.infodicom, dataset)
+        if args.tag:
+            print_dicom_metadata_record(record)
+        else:
+            print_dicom_info(args.infodicom, dataset)
         return 0
 
     data_root = (
