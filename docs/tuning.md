@@ -1,5 +1,8 @@
 # Tuning con nested cross-validation
 
+Per una spiegazione con un esempio su 48 pazienti, refit finale e confronto
+con LOO, leggi [Nested CV spiegata](nested-cv-spiegata.md).
+
 ## Perché è annidato
 
 La inner CV sceglie gli iperparametri; la outer CV valuta il modello senza aver

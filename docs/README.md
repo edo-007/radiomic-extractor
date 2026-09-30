@@ -16,6 +16,7 @@ risultati.
 
 ## Riferimenti
 
+- [Nested CV spiegata: inner, outer, refit e LOO](nested-cv-spiegata.md)
 - [Configurazione dell'estrazione a profili](configurazione-estrazione.md)
 - [Riferimento completo delle configurazioni YAML](riferimento-configurazioni.md)
 - [Comandi CLI e utility DICOM](cli-e-dicom.md)
