@@ -1,0 +1,41 @@
+# Feature CT originale e aggregazione delle texture.
+mirp:
+  feature_families:
+    - statistics
+    - intensity_histogram
+    - morph
+    - intensity_volume_histogram
+    - glcm
+    - glrlm
+    - glszm
+    - gldzm
+    - ngtdm
+    - ngldm
+  # Anche local_intensity, all o none sono disponibili.
+  # none, fixed_bin_size, fixed_bin_number; oppure una lista di metodi.
+  base_discretisation_method: fixed_bin_size
+  bin_width: 10.0 # HU con CT non normalizzata; numero positivo o lista di ampiezze.
+  base_discretisation_n_bins: null # Intero >=2 o lista; richiesto da fixed_bin_number.
+
+  # Discretizzazione separata dell'Intensity Volume Histogram.
+  ivh_discretisation_method: none # none, fixed_bin_size, fixed_bin_number.
+  ivh_discretisation_n_bins: 1000
+  ivh_discretisation_bin_width: null # Numero positivo per fixed_bin_size.
+
+  # Pooling feature: average, min, max, std, var, range; anche liste.
+  texture_feature_pooling_method: average
+  glcm_distance: 1.0 # Distanza in voxel >=1; anche lista.
+  ngldm_distance: 1.0 # Distanza in voxel >=1; anche lista.
+  ngldm_difference_level: 0.0 # Tolleranza alpha >=0; anche lista.
+
+  # null: default da by_slice (3D: 3d_volume_merge; 2D: 2d_slice_merge).
+  # Alternative: 2d_average, 2d_slice_merge, 2.5d_direction_merge,
+  # 2.5d_volume_merge, 3d_average, 3d_volume_merge. Anche liste.
+  glcm_spatial_method: null
+  glrlm_spatial_method: null
+  # null: 3d se by_slice=false, 2d altrimenti. Valori: 2d, 2.5d, 3d; anche liste.
+  # Le modalita' 3D sono incompatibili con by_slice=true.
+  glszm_spatial_method: null
+  gldzm_spatial_method: null
+  ngtdm_spatial_method: null
+  ngldm_spatial_method: null

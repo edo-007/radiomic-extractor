@@ -1,0 +1,22 @@
+# Nessuna perturbazione o modifica delle ROI attiva per default.
+# Le perturbazioni possono produrre PIU' RIGHE PER PAZIENTE, non nuovi pazienti.
+mirp:
+  config_str: "" # Etichetta MIRP opzionale.
+  no_approximation: false # true: vieta approssimazioni, potenzialmente piu' lento.
+  mask_merge: false # Unisce maschere.
+  mask_split: false # Separa regioni disconnesse.
+  mask_select_largest_region: false # Conserva la regione maggiore.
+  mask_select_largest_slice: false # Conserva la slice maggiore; richiede by_slice=true.
+  crop_around_roi: false
+  crop_distance: 150.0 # Margine in mm >=0, usato solo se crop=true.
+
+  perturbation_noise_repetitions: 0 # 0 disattiva; altrimenti numero di realizzazioni.
+  perturbation_noise_level: null # Sigma >=0; null: stimato dall'immagine.
+  perturbation_rotation_angles: 0.0 # Gradi sul piano assiale; anche lista.
+  perturbation_translation_fraction: 0.0 # Frazione di voxel [0,1]; anche lista.
+  perturbation_roi_adapt_type: distance # distance (mm) o fraction (variazione volume).
+  perturbation_roi_adapt_size: 0.0 # Positivo: dilata; negativo: erode; anche lista.
+  perturbation_roi_adapt_max_erosion: 0.8 # Limite erosione, frazione [0,1].
+  perturbation_randomise_roi_repetitions: 0 # Randomizzazione contorni; 0 disattiva.
+  roi_split_boundary_size: 0.0 # Spessore rim/bulk in mm; 0 disattiva; anche lista.
+  roi_split_max_erosion: 0.6 # Frazione minima del volume bulk [0,1].

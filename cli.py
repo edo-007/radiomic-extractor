@@ -310,12 +310,154 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Usa ordinamento discendente per la lista pazienti.",
     )
+
+    subparsers = parser.add_subparsers(dest="command")
+    extract_parser = subparsers.add_parser(
+        "extract",
+        help="Esegue l'estrazione radiomica.",
+    )
+    extract_parser.add_argument(
+        "--config",
+        type=Path,
+        default=(Path(__file__).resolve().parent / "config/config_extractor.yaml"),
+        help="File YAML dell'estrattore (default: config/config_extractor.yaml).",
+    )
+
+    analysis_parser = subparsers.add_parser(
+        "analysis",
+        help="Analizza feature radiomiche, cliniche o combinate.",
+    )
+    analysis_subparsers = analysis_parser.add_subparsers(
+        dest="analysis_command",
+        required=True,
+    )
+    for command, description in (
+        ("univariate", "Esegue l'analisi univariata delle feature."),
+        ("benchmark", "Confronta i modelli in cross-validation."),
+        ("importance", "Calcola le feature dominanti sui validation fold."),
+        ("all", "Esegue tutte le analisi abilitate."),
+        ("tune", "Ottimizza e valuta i modelli con nested cross-validation."),
+    ):
+        command_parser = analysis_subparsers.add_parser(
+            command,
+            help=description,
+        )
+        command_parser.add_argument(
+            "--config",
+            type=Path,
+            default=(Path(__file__).resolve().parent / "config/config_analysis.yaml"),
+            help="File YAML dell'analisi (default: config/config_analysis.yaml).",
+        )
+        if command == "tune":
+            command_parser.add_argument(
+                "--tuning-config",
+                type=Path,
+                default=(Path(__file__).resolve().parent / "config/config_tuning.yaml"),
+                help="File YAML del tuning (default: config/config_tuning.yaml).",
+            )
+
+    inspect_parser = analysis_subparsers.add_parser(
+        "inspect-rf", help="Visualizza una Random Forest salvata, senza riaddestrarla.",
+    )
+    inspect_parser.add_argument("--run-dir", type=Path, help="Cartella tuning; se omessa, scelta con le frecce.")
+    inspect_parser.add_argument(
+        "--tuning-config", type=Path,
+        default=Path(__file__).resolve().parent / "config/config_tuning.yaml",
+        help="Legge output_dir per trovare i tuning disponibili.",
+    )
+    inspect_parser.add_argument("--output-dir", type=Path, help="Directory dove creare il nuovo report (default: nel tuning).")
+    inspect_parser.add_argument("--max-depth", type=int, default=4, help="Profondita' visualizzata, 0-10 (default: 4); statistiche sempre complete.")
+
+    clinical_parser = subparsers.add_parser(
+        "clinical",
+        help="Crea su richiesta il singolo dataset clinico preprocessato.",
+    )
+    clinical_parser.add_argument(
+        "--config",
+        type=Path,
+        default=(Path(__file__).resolve().parent / "config/config_clinical.yaml"),
+        help="File YAML clinico (default: config/config_clinical.yaml).",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.command == "extract":
+        try:
+            from extractor.main import main as run_extractor
+
+            run_extractor(str(args.config))
+        except (
+            FileNotFoundError,
+            IsADirectoryError,
+            NotADirectoryError,
+            ValueError,
+            ValidationError,
+            OSError,
+        ) as error:
+            print(f"Errore: {error}", file=sys.stderr)
+            return 1
+        return 0
+
+    if args.command == "analysis":
+        try:
+            if args.analysis_command == "inspect-rf":
+                from analysis.forest_inspection import run_forest_inspection
+
+                run_forest_inspection(
+                    run_dir=args.run_dir, tuning_config_path=args.tuning_config,
+                    output_dir=args.output_dir, max_depth=args.max_depth,
+                )
+                return 0
+            from analysis.main import run_analysis
+
+            return run_analysis(
+                args.analysis_command,
+                args.config,
+                getattr(args, "tuning_config", (Path(__file__).resolve().parent / "config/config_tuning.yaml")),
+            )
+        except ModuleNotFoundError as error:
+            if error.name == "sklearn":
+                print(
+                    "Errore: scikit-learn non e' installato. "
+                    "Esegui: pip install -r requirements.txt",
+                    file=sys.stderr,
+                )
+                return 1
+            raise
+        except (
+            FileNotFoundError,
+            IsADirectoryError,
+            NotADirectoryError,
+            ValueError,
+            RuntimeError,
+            ValidationError,
+            OSError,
+        ) as error:
+            print(f"Errore: {error}", file=sys.stderr)
+            return 1
+
+    if args.command == "clinical":
+        try:
+            from analysis.clinical import run_clinical_preprocessing
+
+            run_clinical_preprocessing(args.config)
+        except (
+            FileNotFoundError,
+            IsADirectoryError,
+            NotADirectoryError,
+            ValueError,
+            RuntimeError,
+            ValidationError,
+            OSError,
+        ) as error:
+            print(f"Errore: {error}", file=sys.stderr)
+            return 1
+        return 0
+
     patient_listing_requested = (
         args.pazienti
         or args.cartella_dati is not None

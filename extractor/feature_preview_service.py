@@ -69,7 +69,7 @@ class RadiomicFeaturePreviewService:
         image = GenericImage(
             image_data=None,
             image_modality="ct",
-            image_spacing=tuple(self.mirp_config.voxel_spacing),
+            image_spacing=tuple(self.mirp_config.active_voxel_spacing()),
             image_dimensions=(1, 1, 1),
             separate_slices=self.mirp_config.by_slice,
         )
@@ -86,8 +86,9 @@ class RadiomicFeaturePreviewService:
                     feature_families=tuple(settings.feature_extr.families),
                     feature_names=tuple(base_feature_names),
                     parameters=(
-                        "discretisation_method=fixed_bin_size",
-                        f"bin_width={self.mirp_config.bin_width}",
+                        f"discretisation_method={settings.feature_extr.discretisation_method}",
+                        f"bin_width={settings.feature_extr.discretisation_bin_width}",
+                        f"n_bins={settings.feature_extr.discretisation_n_bins}",
                     ),
                 )
             )

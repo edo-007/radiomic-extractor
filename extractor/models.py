@@ -4,20 +4,19 @@ import csv
 import logging
 import re
 from collections import defaultdict
+from datetime import datetime
 from enum import Enum
-from math import isnan
+from math import isclose, isfinite, isnan
 from pathlib import Path
-from typing import Any, Iterable, Literal
-
-import yaml
+from typing import Any, Callable, Iterable, Literal
 
 from pydantic import (
-    AliasChoices,
     BaseModel, 
     ConfigDict,
     DirectoryPath, 
     Field, 
-    FilePath, 
+    FilePath,
+    PrivateAttr,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -26,6 +25,8 @@ from pydicom.datadict import keyword_for_tag
 from pydicom.dataset import Dataset
 
 try:
+    from .config_profiles import load_profiles
+    from .mirp_options import MirpOptions
     from .dicom_metadata_service import (
         DEFAULT_MISSING_VALUE,
         DicomMetadataRecord,
@@ -39,6 +40,8 @@ try:
     )
     from .logger_conf import logger
 except ImportError:
+    from config_profiles import load_profiles
+    from mirp_options import MirpOptions
     from dicom_metadata_service import (
         DEFAULT_MISSING_VALUE,
         DicomMetadataRecord,
@@ -65,7 +68,7 @@ from rich.progress import (
 from rich.table import Table
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_FILE = PROJECT_ROOT / "config_extractor.yaml"
+CONFIG_FILE = PROJECT_ROOT / "config" / "config_extractor.yaml"
 _DICOM_METADATA_SERVICE = DicomMetadataService()
 METADATA_COLUMN_PREFIX = "metadata_"
 IBSI_COMPLIANT_FILTER_KERNELS = {
@@ -166,6 +169,8 @@ def _normalise_metadata_name(value: str) -> str:
 class DataConfig(BaseModel):
     """Percorsi dei dati in input e output."""
 
+    model_config = ConfigDict(extra="forbid")
+
     patients_folder: DirectoryPath
     patients_csv: FilePath | None = None
     output_dir: Path = Path("./results")
@@ -175,20 +180,78 @@ class DataConfig(BaseModel):
         self.output_dir.mkdir(parents=True, exist_ok=True)
         return self.output_dir
 
-    def ensure_features_csv_path(self) -> Path:
+    def create_experiment_dir(self, now: datetime | None = None) -> Path:
+        """Crea una cartella univoca per una singola esecuzione."""
         output_dir = self.ensure_output_dir()
+        timestamp = (now or datetime.now()).strftime("%Y-%m-%d_%H-%M-%S")
+        experiment_dir = output_dir / f"extraction-{timestamp}"
+        for counter in range(1, 1000):
+            candidate = (
+                experiment_dir
+                if counter == 1
+                else experiment_dir.with_name(f"{experiment_dir.name}_{counter}")
+            )
+            try:
+                candidate.mkdir(parents=False, exist_ok=False)
+            except FileExistsError:
+                continue
+            return candidate
+        raise FileExistsError(
+            f"Non riesco a trovare un nome libero per l'esperimento '{experiment_dir}'"
+        )
+
+    def ensure_features_csv_path(
+        self,
+        output_dir: Path | None = None,
+        voxel_spacing: Iterable[float] | None = None,
+    ) -> Path:
+        experiment_output = output_dir is not None
+        output_dir = output_dir or self.ensure_output_dir()
         csv_path = self.features_csv.expanduser()
-        if not csv_path.is_absolute():
+        if experiment_output:
+            # Ogni esperimento deve essere autocontenuto, anche quando
+            # features_csv era configurato come percorso assoluto.
+            csv_path = output_dir / csv_path.name
+        elif not csv_path.is_absolute():
             csv_path = output_dir / csv_path
+
+        if voxel_spacing is not None:
+            spacing_values = list(voxel_spacing)
+            if not spacing_values:
+                raise ValueError("voxel_spacing non puo' essere vuoto")
+            spacing_label = format(float(spacing_values[0]), ".12g").replace(".", "p")
+            csv_path = csv_path.with_name(
+                f"{csv_path.stem}_voxel-spacing-{spacing_label}mm"
+                f"{csv_path.suffix or '.csv'}"
+            )
+        elif not experiment_output:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+            csv_path = csv_path.with_name(
+                f"{csv_path.stem}_{timestamp}{csv_path.suffix or '.csv'}"
+            )
+
+        csv_path = self._unique_output_path(csv_path)
         csv_path.parent.mkdir(parents=True, exist_ok=True)
         return csv_path
 
+    @staticmethod
+    def _unique_output_path(path: Path) -> Path:
+        if not path.exists():
+            return path
+        for counter in range(2, 1000):
+            candidate = path.with_name(f"{path.stem}_{counter}{path.suffix}")
+            if not candidate.exists():
+                return candidate
+        raise FileExistsError(
+            f"Non riesco a trovare un nome libero per il file di output '{path}'"
+        )
 
-class MirpConfig(BaseModel):
+
+class MirpConfig(MirpOptions):
     """Parametri necessari per l'estrazione radiomica con MIRP."""
 
-    bin_width: float = Field(25.0, gt=0)
-    voxel_spacing: list[float] = Field(default_factory=lambda: [1.0, 1.0, 1.0])
+    bin_width: float | list[float] = 25.0
+    voxel_spacing: list[float] = Field(default_factory=lambda: [1.0])
     roi_names: list[str] | None = None
     resegmentation_intensity_range: list[float] | None = Field(
         default_factory=lambda: [-1000.0, float("nan")]
@@ -227,23 +290,59 @@ class MirpConfig(BaseModel):
     nonseparable_wavelet_decomposition_level: int | list[int] = 1
     nonseparable_wavelet_response: str = "real"
     by_slice: bool = False
-    num_processes: int | None = Field(
-        1,
-        validation_alias=AliasChoices("num_processes", "num_cpus"),
-    )
+    num_processes: int | None = 1
     write_features: bool = False
     export_features: bool = True
 
+    @field_validator("voxel_spacing", mode="before")
+    @classmethod
+    def normalise_voxel_spacing(cls, value: Any) -> Any:
+        # Un numero per ogni spacing isotropico, senza triplette dimensionali.
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return [value]
+        if isinstance(value, (list, tuple)) and any(
+            isinstance(item, (bool, list, tuple)) for item in value
+        ):
+            raise ValueError("voxel_spacing richiede numeri isotropici, es. [1.25, 1.0, 2.0]")
+        return value
+
     @field_validator("voxel_spacing")
     @classmethod
-    def validate_voxel_spacing(cls, 
-        value: list[float]
+    def validate_voxel_spacing(
+        cls,
+        value: list[float],
     ) -> list[float]:
-        if len(value) != 3:
-            raise ValueError("voxel_spacing deve contenere tre valori: z, y, x")
-        if any(spacing <= 0 for spacing in value):
-            raise ValueError("voxel_spacing deve contenere solo valori positivi")
+        if not value or any(not isfinite(item) or item <= 0 for item in value):
+            raise ValueError("voxel_spacing richiede almeno un valore finito e positivo")
+        if len(set(value)) != len(value):
+            raise ValueError("voxel_spacing contiene valori isotropici duplicati")
         return value
+
+    def voxel_spacings(self) -> list[list[float]]:
+        """Restituisce sempre la configurazione come lista di spacing 3D."""
+        return [[spacing] * 3 for spacing in self.voxel_spacing]
+
+    def for_voxel_spacing(self, spacing: Iterable[float]) -> "MirpConfig":
+        """Crea la configurazione MIRP per un solo spacing del batch."""
+        values = list(spacing)
+        if len(values) != 3 or any(not isfinite(v) or v <= 0 for v in values) or not all(
+            isclose(v, values[0]) for v in values
+        ):
+            raise ValueError("Lo spacing MIRP interno deve essere una tripletta isotropica positiva")
+        return self.model_copy(update={"voxel_spacing": [values[0]]})
+
+    def active_voxel_spacing(self) -> list[float]:
+        spacings = self.voxel_spacings()
+        if len(spacings) != 1:
+            raise ValueError(
+                "La configurazione MIRP attiva deve contenere un solo voxel spacing"
+            )
+        return spacings[0]
+
+    def mirp_voxel_spacing(self) -> list[float]:
+        """Adatta [z, y, x] al formato MIRP 3D o 2D slice-by-slice."""
+        spacing = self.active_voxel_spacing()
+        return spacing[1:] if self.by_slice else spacing
 
     @field_validator("filter_kernels", mode="before")
     @classmethod
@@ -367,6 +466,7 @@ class MirpConfig(BaseModel):
         return value
 
     @field_validator(
+        "bin_width",
         "laplacian_of_gaussian_sigma",
         "gabor_sigma",
         "gabor_lambda",
@@ -383,7 +483,7 @@ class MirpConfig(BaseModel):
         values = _as_list(value)
         if any(isinstance(item, bool) or not isinstance(item, (float, int)) for item in values):
             raise ValueError("Il parametro deve essere numerico o una lista di numeri")
-        if any(float(item) <= 0.0 for item in values):
+        if not values or any(not isfinite(float(item)) or float(item) <= 0.0 for item in values):
             raise ValueError("Il parametro deve contenere solo valori maggiori di 0")
         return value
 
@@ -400,6 +500,8 @@ class MirpConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_required_filter_settings(self) -> "MirpConfig":
+        if self.mask_select_largest_slice and not self.by_slice:
+            raise ValueError("mask_select_largest_slice richiede by_slice: true")
         filters = set(self.filter_kernels or [])
         missing_settings: list[str] = []
 
@@ -479,11 +581,10 @@ class MirpConfig(BaseModel):
             "association_strategy": "frame_of_reference",
             "ibsi_compliant": True,
             "by_slice": self.by_slice,
-            "new_spacing": self.voxel_spacing,
+            "new_spacing": self.mirp_voxel_spacing(),
             "base_feature_families": self.feature_families,
-            "base_discretisation_method": "fixed_bin_size",
-            "base_discretisation_bin_width": float(self.bin_width),
-            "texture_feature_pooling_method": "average",
+            **self.additional_mirp_kwargs(),
+            "base_discretisation_bin_width": self.bin_width,
         }
 
         if self.roi_names:
@@ -497,7 +598,7 @@ class MirpConfig(BaseModel):
             kwargs.update({
                 "filter_kernels": self.filter_kernels,
                 "response_map_feature_families": self.response_map_feature_families,
-                "response_map_discretisation_method": "fixed_bin_number",
+                "response_map_discretisation_method": self.response_map_discretisation_method,
                 "response_map_discretisation_n_bins": self.response_map_discretisation_n_bins,
                 "boundary_condition": self.boundary_condition,
             })
@@ -604,6 +705,8 @@ class DicomMetadataTagConfig(BaseModel):
 class DicomMetadataConfig(BaseModel):
     """Configurazione dei metadati DICOM da aggiungere al CSV."""
 
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool = True
     tags: list[DicomMetadataTagConfig] = Field(default_factory=list)
 
@@ -653,15 +756,16 @@ class DicomMetadataConfig(BaseModel):
 class GlobalConfig(BaseModel):
     """Schema completo del file YAML."""
 
+    model_config = ConfigDict(extra="forbid")
+    _source_files: dict[str, bytes] = PrivateAttr(default_factory=dict)
+    provenance: dict[str, Any] | None = None
+
     data: DataConfig
     dicom_metadata: DicomMetadataConfig = Field(
         default_factory=DicomMetadataConfig
     )
     mirp: MirpConfig = Field(default_factory=MirpConfig)
-    n_test: int | Literal[False] = Field(
-        default=False,
-        validation_alias=AliasChoices("n-test", "n_test"),
-    )
+    n_test: int | Literal[False] = False
 
     @field_validator("n_test", mode="before")
     @classmethod
@@ -669,10 +773,10 @@ class GlobalConfig(BaseModel):
         if value is False:
             return value
         if value is True:
-            raise ValueError("n-test deve essere false oppure un intero >= 1")
+            raise ValueError("n_test deve essere false oppure un intero >= 1")
         if isinstance(value, int) and value >= 1:
             return value
-        raise ValueError("n-test deve essere false oppure un intero >= 1")
+        raise ValueError("n_test deve essere false oppure un intero >= 1")
 
 
 class ConfigManager(BaseModel):
@@ -680,27 +784,25 @@ class ConfigManager(BaseModel):
 
     def load_configuration(self) -> GlobalConfig:
         """Carica lo YAML e lo convalida tramite i modelli Pydantic."""
-        with open(self.config_path, "r", encoding="utf-8") as yaml_file:
-            raw_data = yaml.safe_load(yaml_file) or {}
-
-        raw_data = self._normalise_legacy_config(raw_data)
+        raw_data, sources = load_profiles(Path(self.config_path))
         raw_data = self._resolve_relative_paths(raw_data)
-        return GlobalConfig(**raw_data)
-
-    def _normalise_legacy_config(self, raw_data: dict[str, Any]) -> dict[str, Any]:
-        if "data" not in raw_data and "patients_folder" in raw_data:
-            raw_data = {
-                "data": {
-                    "patients_folder": raw_data.pop("patients_folder"),
-                    "output_dir": raw_data.pop("output_dir", "./results"),
-                },
-                **raw_data,
-            }
-        return raw_data
+        config = GlobalConfig(**raw_data)
+        # Convalida le combinazioni con la versione MIRP installata, prima
+        # della scansione dei DICOM o della creazione di output.
+        from mirp.settings.generic import SettingsClass
+        for spacing in config.mirp.voxel_spacings():
+            try:
+                SettingsClass(**config.mirp.for_voxel_spacing(spacing).to_mirp_kwargs())
+            except (ValueError, TypeError) as error:
+                raise ValueError(f"Configurazione MIRP non valida ({spacing[0]:g} mm): {error}") from error
+        config._source_files = sources
+        return config
 
     def _resolve_relative_paths(self, raw_data: dict[str, Any]) -> dict[str, Any]:
         config_dir = Path(self.config_path).resolve().parent
         data = raw_data.get("data", {})
+        if not isinstance(data, dict):
+            raise ValueError("data deve essere una mappa YAML")
 
         for key in ("patients_folder", "patients_csv", "output_dir"):
             value = data.get(key)
@@ -1048,15 +1150,18 @@ class MirpExtractor(BaseModel):
         import mirp as _mirp
 
         kwargs = {
-            "image": str(paziente.path_ct),
-            "mask": str(paziente.path_rt),
+            # MIRP deve ricevere anche il prefisso Windows per i percorsi lunghi:
+            # senza, file esistenti possono risultare mancanti e il suo messaggio
+            # d'errore sui metadati puo' entrare in ricorsione.
+            "image": str(_filesystem_path(paziente.path_ct)),
+            "mask": str(_filesystem_path(paziente.path_rt)),
             **self.config.to_mirp_kwargs(),
         }
 
         # Stampa un recap dei parametri:
         # Sono sicuro che arrivano correttamente qui dalla configurazione .yaml
 
-        write_dir = str(output_dir) if output_dir is not None else None
+        write_dir = str(_filesystem_path(output_dir)) if output_dir is not None else None
 
         if verbose: 
             self._print_summary()
@@ -1102,8 +1207,11 @@ class MirpExtractor(BaseModel):
         pazienti: list[Paziente],
         output_dir: Path | None = None,
         verbose: bool = False,
+        on_patient_completed: (
+            Callable[[Paziente, list[Any] | None], None] | None
+        ) = None,
     ) -> dict[str, list[Any] | None]:
-        """Estrae più pazienti in sequenza mostrando l'avanzamento."""
+        """Estrae in sequenza e notifica il completamento di ogni paziente."""
         if not pazienti:
             return {}
 
@@ -1135,9 +1243,12 @@ class MirpExtractor(BaseModel):
             BarColumn(),
             MofNCompleteColumn(),
             TextColumn("paziente: [cyan]{task.fields[current_patient]}"),
+            TextColumn("trascorso:"),
             TimeElapsedColumn(),
+            TextColumn("rimanente stimato:"),
             TimeRemainingColumn(),
             console=Console(),
+            refresh_per_second=1,
         )
 
         with progress:
@@ -1158,6 +1269,8 @@ class MirpExtractor(BaseModel):
                     output_dir,
                 )
                 completed_results[patient_name] = features
+                if on_patient_completed is not None:
+                    on_patient_completed(paziente, features)
                 progress.update(task_id, advance=1)
 
         logger.info(
@@ -1174,8 +1287,9 @@ class MirpExtractor(BaseModel):
         pazienti: list[Paziente],
         csv_path: Path,
         metadata_config: DicomMetadataConfig | None = None,
+        append: bool = False,
     ) -> int:
-        """Scrive metadati paziente, DICOM e feature radiomiche in un CSV."""
+        """Scrive o aggiunge metadati DICOM e feature radiomiche nel CSV."""
         import pandas as pd
 
         frames: list[pd.DataFrame] = []
@@ -1213,7 +1327,9 @@ class MirpExtractor(BaseModel):
                     table.insert(
                         index,
                         column,
-                        metadata_values.get(column, DEFAULT_MISSING_VALUE),
+                        self._format_metadata_csv_value(
+                            metadata_values.get(column, DEFAULT_MISSING_VALUE)
+                        ),
                     )
                 frames.append(table)
 
@@ -1229,8 +1345,45 @@ class MirpExtractor(BaseModel):
                 ]
             )
 
-        features.to_csv(csv_path, sep=";", na_rep="", index=False)
-        logger.info("Feature scritte in %s", csv_path)
+        if append and features.empty:
+            logger.warning("Nessuna nuova riga di feature da aggiungere a %s", csv_path)
+            return 0
+
+        write_mode = "w"
+        write_header = True
+        if append and csv_path.exists() and csv_path.stat().st_size > 0:
+            existing_columns = pd.read_csv(csv_path, sep=";", nrows=0).columns.tolist()
+            current_columns = features.columns.tolist()
+            missing_columns = [
+                column for column in existing_columns if column not in current_columns
+            ]
+            unexpected_columns = [
+                column for column in current_columns if column not in existing_columns
+            ]
+            if missing_columns or unexpected_columns:
+                raise ValueError(
+                    "Le colonne delle feature non coincidono con il CSV esistente. "
+                    f"Mancanti: {missing_columns or '-'}; "
+                    f"inaspettate: {unexpected_columns or '-'}"
+                )
+            features = features.loc[:, existing_columns]
+            write_mode = "a"
+            write_header = False
+
+        features.to_csv(
+            csv_path,
+            sep=";",
+            na_rep="",
+            index=False,
+            mode=write_mode,
+            header=write_header,
+        )
+        logger.info(
+            "%d righe di feature %s %s",
+            len(features),
+            "aggiunte a" if write_mode == "a" else "scritte in",
+            csv_path,
+        )
         return len(features)
 
     @staticmethod
@@ -1350,6 +1503,13 @@ class MirpExtractor(BaseModel):
     @staticmethod
     def _format_nome_cognome(value: str) -> str:
         return " ".join(re.sub(r"[\^_]+", " ", value).split())
+
+    @staticmethod
+    def _format_metadata_csv_value(value: Any) -> Any:
+        """Converte i valori DICOM multipli in una singola cella CSV."""
+        if isinstance(value, (list, tuple)):
+            return "\\".join(str(item) for item in value)
+        return value
 
     def _extract_patient(
         self,

@@ -1,0 +1,23 @@
+# Preprocessing CT e maschera. Valori attuali preservati.
+mirp:
+  # Ordine spline 0..5: 0 nearest neighbour, 1 lineare, 3 cubica.
+  spline_order: 3
+  anti_aliasing: true
+  smoothing_beta: 0.98 # (0,1]; 1: nessuna attenuazione antialias.
+  roi_spline_order: 1
+  roi_interpolation_mask_inclusion_threshold: 0.5 # (0,1], soglia maschera interpolata.
+
+  # [min,max] HU; .nan lascia aperto il limite. null disattiva il range.
+  resegmentation_intensity_range: [0, .nan]
+  resegmentation_sigma: null # >0: esclude outlier oltre N deviazioni standard.
+
+  # Maschera tissutale per normalizzazione: none, range, relative_range.
+  tissue_mask_type: relative_range
+  tissue_mask_range: null # [min,max]; null: default del metodo scelto.
+  # none, range, relative_range, quantile_range, standardisation.
+  
+  # Normalizzare la CT cambia il significato delle HU/bin width.
+  intensity_normalisation: none
+  intensity_normalisation_range: null # HU per range; frazioni 0..1 per gli altri range.
+  intensity_normalisation_saturation: null # [min,max] dopo normalizzazione; .nan: aperto.
+  intensity_scaling: null # Fattore moltiplicativo finale; null equivale a 1.

@@ -1,0 +1,55 @@
+
+                                                                            DATI CARICATI
+
+CSV : C:\Users\TA\Desktop\edoardo\radiomic-output\experiment-2026-09-04_09-33-50\features_voxel-spacing-2mm.csv │
+Pazienti:  48
+Feature numeriche: 10103
+STABILE: 24 
+INSTABILE (classe positiva):  24
+
+                                                                              MODELLI ABILITATI
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Modello       ┃ Parametri                                                                                                                                                 ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ Random forest │ n_estimators=100, max_depth=None, min_samples_split=2, min_samples_leaf=1, max_features=sqrt, class_weight=balanced_subsample, n_jobs=-1, random_state=42 │
+│ SVM RBF       │ C=1.0, gamma=scale, class_weight=balanced│
+└───────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                   BENCHMARK IN CROSS-VALIDATION
+┏━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━┓
+┃ Modello       ┃ Fold ┃ ROC-AUC ┃ Bal. accuracy ┃ Accuracy ┃ Sensibilita' ┃ Specificita' ┃    F1 ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━┩
+│ SVM RBF       │   48 │   0.705 │         0.646 │    0.646 │        0.667 │        0.625 │ 0.653 │
+│ Random forest │   48 │   0.648 │         0.646 │    0.646 │        0.583 │        0.708 │ 0.622 │
+└───────────────┴──────┴─────────┴───────────────┴──────────┴──────────────┴──────────────┴───────┘
+LOO: le metriche sono calcolate aggregando tutte le predizioni out-of-fold, una per paziente.
+Permutation importance non eseguita: con un solo paziente nel validation fold la permutazione non e' definita. Per questa analisi usa stratified_kfold o repeated_stratified_kfold.
+
+
+######################################################################################################################################################################################
+######################################################################################################################################################################################
+
+                                                                DATI CARICATI
+
+CSV:  C:\Users\TA\Desktop\edoardo\radiomic-output\experiment-2026-09-04_09-33-50\features_voxel-spacing-1p25mm.csv 
+Righe:  48
+Pazienti:  48
+Feature numeriche:  10103
+STABILE:  24
+INSTABILE (classe positiva):  24
+
+                                                                              MODELLI ABILITATI
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Modello       ┃ Parametri                                                                                                                                                 ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ Random forest │ n_estimators=100, max_depth=None, min_samples_split=2, min_samples_leaf=1, max_features=sqrt, class_weight=balanced_subsample, n_jobs=-1, random_state=42 │
+│ SVM RBF       │ C=1.0, gamma=scale, class_weight=balanced│
+└───────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                   BENCHMARK IN CROSS-VALIDATION
+┏━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━┓
+┃ Modello       ┃ Fold ┃ ROC-AUC ┃ Bal. accuracy ┃ Accuracy ┃ Sensibilita' ┃ Specificita' ┃    F1 ┃
+┡━━━━━━━━━━━━━━━╇━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━┩
+│ SVM RBF       │   48 │   0.743 │         0.667 │    0.667 │        0.708 │        0.625 │ 0.680 │
+│ Random forest │   48 │   0.681 │         0.583 │    0.583 │        0.500 │        0.667 │ 0.545 │
+└───────────────┴──────┴─────────┴───────────────┴──────────┴──────────────┴──────────────┴───────┘
+LOO: le metriche sono calcolate aggregando tutte le predizioni out-of-fold, una per paziente.
+Permutation importance non eseguita: con un solo paziente nel validation fold la permutazione non e' definita. Per questa analisi usa stratified_kfold o repeated_stratified_kfold.

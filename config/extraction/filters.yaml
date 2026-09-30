@@ -1,0 +1,128 @@
+# Filtri: i parametri hanno effetto solo se il relativo filtro e' attivo.
+# Estrazione CT IBSI: Gaussian e Riesz non esposti (vedi guida).
+mirp:
+  # ---------------------------------------------------------------------------
+  # Filtri immagine IBSI-compliant
+  # ---------------------------------------------------------------------------
+  # ibsi_compliant e' sempre true nel codice e non va configurato qui.
+  #
+  # Valori ammessi:
+  # - mean
+  # - laplacian_of_gaussian
+  # - log
+  # - laws
+  # - gabor
+  # - separable_wavelet
+  # - nonseparable_wavelet
+  #
+  # Usa null per mantenere invariata l'estrazione di base.
+  filter_kernels: null
+  # filter_kernels:
+  #   - laplacian_of_gaussian
+  #   - gabor
+  #   - laws
+  #   - separable_wavelet
+  #   # - nonseparable_wavelet
+
+  # ---------------------------------------------------------------------------
+  # Feature estratte dalle immagini filtrate
+  # ---------------------------------------------------------------------------
+  response_map_feature_families:
+    - statistics
+    - intensity_histogram
+    - glcm  # grey_level_cooccurrence_matrix
+    - glrlm # grey_level_run_length_matrix
+    - glszm # grey_level_size_zone_matrix
+    - gldzm # grey_level_distance_zone_matrix
+    - ngtdm # neighbourhood_grey_tone_difference_matrix
+    - ngldm # neighbouring_grey_level_dependence_matrix
+
+  # MIRP  Sconsiglia fixed_bin_size sulle response map perche' dopo il filtraggio 
+  # l'intensita' non mantiene un'unita' fisica diretta.
+  response_map_discretisation_n_bins: 16
+
+  # Gestione dei bordi durante i filtri.
+  boundary_condition: mirror
+
+  # ---------------------------------------------------------------------------
+  # Mean filter
+  # ---------------------------------------------------------------------------
+  # Richiesto solo se filter_kernels contiene mean.
+  mean_filter_kernel_size: null
+
+  # ---------------------------------------------------------------------------
+  # Laplacian-of-Gaussian filter
+  # ---------------------------------------------------------------------------
+  # Usa questo filtro per i Laplace filters IBSI-compliant.
+  # Il filtro laplace/laplacian semplice non e' IBSI-compliant e non e' esposto.
+  #
+  # Richiesto solo se filter_kernels contiene laplacian_of_gaussian o log.
+  laplacian_of_gaussian_sigma: [1.0, 2.0, 3.0, 5.0, 10.0]
+  laplacian_of_gaussian_kernel_truncate: 4.0
+  laplacian_of_gaussian_pooling_method: none
+
+  # ---------------------------------------------------------------------------
+  # Gabor filter
+  # ---------------------------------------------------------------------------
+  # Richiesti solo se filter_kernels contiene gabor:
+  # - gabor_sigma
+  # - gabor_lambda
+  gabor_sigma: [1.0, 2.0, 3.0, 4.0]
+  gabor_lambda: [1.0, 2.0, 4.0, 8.0]
+  gabor_gamma: 1.0
+  gabor_theta: [0.0, 45.0, 90.0, 135.0]
+  gabor_response: modulus
+  gabor_pooling_method: max
+
+  # ---------------------------------------------------------------------------
+  # Laws filter
+  # ---------------------------------------------------------------------------
+  # Richiesto solo se filter_kernels contiene laws.
+#   laws_kernel: [l5e5s5, w5r5l3]
+  laws_kernel: [l5e5, w5r5]
+  laws_delta: 7
+  laws_compute_energy: true
+  laws_rotation_invariance: true
+  laws_pooling_method: max
+
+  # ---------------------------------------------------------------------------
+  # Wavelet separabili
+  # ---------------------------------------------------------------------------
+  # Richiesti solo se filter_kernels contiene separable_wavelet:
+  # - separable_wavelet_families
+  # - separable_wavelet_set
+  separable_wavelet_families: [coif4]
+  separable_wavelet_set: [hh, ll]
+  # separable_wavelet_set: [hhh, lll]
+  separable_wavelet_stationary: true
+  separable_wavelet_decomposition_level: 1
+  separable_wavelet_rotation_invariance: true
+  separable_wavelet_pooling_method: max
+
+  # ---------------------------------------------------------------------------
+  # Wavelet non separabili
+  # ---------------------------------------------------------------------------
+  # Richiesto solo se filter_kernels contiene nonseparable_wavelet.
+  # Esempio: nonseparable_wavelet_families: [simoncelli]
+  nonseparable_wavelet_families: null
+  nonseparable_wavelet_decomposition_level: 1
+  nonseparable_wavelet_response: real
+
+  # none, fixed_bin_number, fixed_bin_size, oppure una lista di metodi.
+  response_map_discretisation_method: fixed_bin_number
+  response_map_discretisation_bin_width: null # Richiesto per fixed_bin_size.
+
+  # null eredita boundary_condition; altrimenti reflect/constant/nearest/mirror/wrap.
+  mean_filter_boundary_condition: null
+  laplacian_of_gaussian_boundary_condition: null
+  laws_boundary_condition: null
+  gabor_boundary_condition: null
+  separable_wavelet_boundary_condition: null
+  nonseparable_wavelet_boundary_condition: null
+
+  gabor_theta_step: null # Passo in gradi, richiede theta singolo; null: angoli espliciti.
+  gabor_rotation_invariance: false # Pooling sui piani ortogonali in 3D.
+
+  # I kernel Laws e wavelet sopra sono quelli 2D preesistenti, ora inattivi.
+  # Prima di attivarli con by_slice=false, usare tre componenti, ad esempio:
+  # laws_kernel: [l5e5s5, w5r5l3]; separable_wavelet_set: [hhh, lll].

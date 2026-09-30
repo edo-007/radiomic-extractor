@@ -4,7 +4,7 @@ except ImportError:
     from models import carica_pazienti, load_configuration
 
 
-# Carica e valida i parametri scritti in config_extractor.yaml.
+# Carica e valida i parametri scritti in config/config_extractor.yaml.
 config = load_configuration()
 
 # Cerca nelle cartelle dei dati le coppie CT + RTStruct.
